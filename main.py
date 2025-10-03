@@ -1,7 +1,7 @@
 import logging
 import os
 import time
-import sqlite3 # ✅ جديد: استيراد مكتبة SQLite
+import sqlite3 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -1003,10 +1003,10 @@ def initialize_application() -> None:
             ],
             FEEDBACK_MESSAGE: [back_to_menu_handler, MessageHandler(text_message_filter, feedback_message)],
             
-            # ✅ جديد: حالات المشرف لإضافة متطوع
+            # ✅ تم التعديل هنا:
             ADMIN_MENU: [
-                back_to_menu_handler,
-                CallbackQueryHandler(admin_add_volunteer_prompt, pattern='^admin_add_volunteer$')
+                CallbackQueryHandler(admin_add_volunteer_prompt, pattern='^admin_add_volunteer$'),
+                back_to_menu_handler, 
             ],
             ADD_VOLUNTEER_FULL_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, admin_get_full_name)],
             ADD_VOLUNTEER_SELECT_TEAM: [
