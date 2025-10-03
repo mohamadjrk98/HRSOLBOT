@@ -1,6 +1,7 @@
 import logging
 import os
 import time
+import sqlite3 # ✅ جديد: استيراد مكتبة SQLite
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -19,13 +20,91 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --------------------------------- إعداد قاعدة البيانات ---------------------------------
+
+DB_NAME = 'volunteers_system.db'
+
+def get_db_connection():
+    """إنشاء اتصال بقاعدة بيانات SQLite"""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row  # الوصول إلى الأعمدة بالاسم
+    return conn
+
+def setup_database():
+    """إنشاء جدولي الفرق والمتطوعين وتعبئة بعض الفرق المبدئية"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 1. Teams Table (الفرق)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Teams (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        )
+    ''')
+    
+    # 2. Volunteers Table (المتطوعون)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Volunteers (
+            id INTEGER PRIMARY KEY,
+            telegram_id INTEGER UNIQUE,
+            full_name TEXT NOT NULL,
+            team_id INTEGER,
+            registration_date TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (team_id) REFERENCES Teams(id)
+        )
+    ''')
+
+    # إضافة فرق مبدئية إذا لم تكن موجودة
+    initial_teams = [('فريق الدعم الأول',), ('فريق الدعم الثاني',), ('فريق المتابعة',)]
+    for team in initial_teams:
+        try:
+            cursor.execute("INSERT INTO Teams (name) VALUES (?)", team)
+        except sqlite3.IntegrityError:
+            pass # تم إضافته مسبقًا
+
+    conn.commit()
+    conn.close()
+
+def get_all_teams():
+    """جلب جميع الفرق من قاعدة البيانات"""
+    conn = get_db_connection()
+    teams = conn.execute("SELECT id, name FROM Teams").fetchall()
+    conn.close()
+    return teams
+
+def add_new_volunteer_to_db(telegram_id, full_name, team_id):
+    """إدراج متطوع جديد في جدول المتطوعين"""
+    conn = get_db_connection()
+    try:
+        conn.execute(
+            "INSERT INTO Volunteers (telegram_id, full_name, team_id) VALUES (?, ?, ?)",
+            (telegram_id, full_name, team_id)
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False # المتطوع مسجل مسبقًا بنفس رقم الـ ID
+
+def is_admin(chat_id):
+    """التحقق مما إذا كان المستخدم هو المشرف"""
+    if not ADMIN_CHAT_ID:
+        return False
+    return str(chat_id) == str(ADMIN_CHAT_ID)
+
+
+# --------------------------------- تعريف الحالات (States) ---------------------------------
+
 # الحالات (States) المستخدمة في ConversationHandler
 (MAIN_MENU, FIRST_NAME, LAST_NAME, TEAM_NAME, 
  APOLOGY_TYPE, INITIATIVE_NAME, APOLOGY_REASON, APOLOGY_NOTES,
  LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
- FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES) = range(15)
+ FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES,
+ ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM, ADD_VOLUNTEER_FINALIZE) = range(19)
 
-# متغيرات البيئة (Environment Variables) - سيتم تعيينها في Render
+# متغيرات البيئة (Environment Variables)
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 
@@ -120,7 +199,7 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
     return FIRST_NAME
 
-# --------------------------------- مسار الإسم والفريق ---------------------------------
+# --------------------------------- مسار الإسم والفريق ... (بقية المسارات القديمة) ---------------------------------
 
 async def first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """حفظ الاسم الأول وطلب الكنية"""
@@ -189,7 +268,8 @@ async def team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     return MAIN_MENU
 
-# --------------------------------- مسار طلب الاعتذار ---------------------------------
+# (بقية دوال الاعتذار والإجازة والمشاكل والاقتراحات لم يتم تعديلها باستثناء إضافة المتغيرات الجديدة)
+# ... [apology_type, initiative_name, apology_reason, apology_notes, leave_start_date, leave_end_date, leave_reason, leave_notes, problem_description, problem_notes, feedback_message]
 
 async def apology_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """حفظ نوع الفعالية والتوجيه حسب نوعها (مبادرة أم غيرها)"""
@@ -346,7 +426,6 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     context.user_data.clear()
     return ConversationHandler.END
 
-# --------------------------------- مسار طلب الإجازة ---------------------------------
 
 async def leave_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """حفظ تاريخ بدء الإجازة وطلب تاريخ الانتهاء"""
@@ -480,7 +559,6 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     context.user_data.clear()
     return ConversationHandler.END
 
-# --------------------------------- مسار المشاكل ---------------------------------
 
 async def problem_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """حفظ وصف المشكلة وطلب الملاحظات"""
@@ -572,7 +650,6 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     context.user_data.clear()
     return ConversationHandler.END
 
-# --------------------------------- مسار الاقتراحات ---------------------------------
 
 async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """استلام الاقتراح وإرساله للمدير"""
@@ -627,6 +704,151 @@ async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     context.user_data.clear()
     return ConversationHandler.END
+
+
+# --------------------------------- دوال المشرف لإضافة متطوع ---------------------------------
+
+async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ جديد: نقطة دخول المشرف (الأمر /admin)"""
+    chat_id = update.effective_chat.id
+    if not is_admin(chat_id):
+        await update.message.reply_text("❌ غير مصرح لك باستخدام هذا الأمر.")
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton("➕ إضافة متطوع جديد", callback_data='admin_add_volunteer')],
+        [InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data='back_to_menu')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        '👋 مرحباً بك يا مشرف!\n\n'
+        'لوحة تحكم المتطوعين:',
+        reply_markup=reply_markup
+    )
+    return ADMIN_MENU
+
+async def admin_add_volunteer_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ جديد: مطالبة المشرف بإدخال الاسم الكامل"""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.edit_message_text(
+        '➕ إضافة متطوع جديد\n\n'
+        'الرجاء إدخال **الاسم الكامل للمتطوع** (كما سيظهر في القوائم):',
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ADD_VOLUNTEER_FULL_NAME
+
+async def admin_get_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ جديد: حفظ الاسم الكامل والمطالبة باختيار الفريق"""
+    context.user_data['new_volunteer_full_name'] = update.message.text
+    
+    teams = get_all_teams()
+    
+    if not teams:
+        await update.message.reply_text(
+            '❌ لا توجد فرق مسجلة في قاعدة البيانات حالياً!\n'
+            'الرجاء إضافة فرق يدوياً أولاً ثم المحاولة مرة أخرى عبر /admin.'
+        )
+        return await admin_start(update, context)
+
+    # إنشاء أزرار الفرق ديناميكياً
+    keyboard = [[InlineKeyboardButton(team['name'], callback_data=f"team_id|{team['id']}")] for team in teams]
+    keyboard.append([InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data='back_to_menu')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        f"تم تسجيل الاسم: {update.message.text}\n\n"
+        "الرجاء اختيار **الفريق** الذي سينضم إليه المتطوع:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ADD_VOLUNTEER_SELECT_TEAM
+
+async def admin_select_team(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ جديد: حفظ الفريق والمطالبة برقم معرف تيليجرام"""
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data.split('|')
+    team_id = int(data[1])
+    
+    # جلب اسم الفريق
+    conn = get_db_connection()
+    team_row = conn.execute("SELECT name FROM Teams WHERE id = ?", (team_id,)).fetchone()
+    conn.close()
+    team_name = team_row['name'] if team_row else 'غير معروف'
+    
+    context.user_data['new_volunteer_team_id'] = team_id
+    context.user_data['new_volunteer_team_name'] = team_name
+
+    keyboard = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f"✅ تم اختيار الفريق: **{team_name}**\n\n"
+        "الخطوة الأخيرة: الرجاء إرسال **رقم معرف تيليجرام (Telegram ID)** الخاص بالمتطوع.\n"
+        "*(يمكن الحصول عليه عبر بوتات مثل @userinfobot)*\n\n"
+        "مثال: `123456789`",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ADD_VOLUNTEER_FINALIZE
+
+async def admin_finalize_volunteer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """✅ جديد: استلام رقم تيليجرام وحفظ المتطوع في القاعدة"""
+    telegram_id_str = update.message.text
+    
+    keyboard = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # التحقق من أن الإدخال هو رقم
+    if not telegram_id_str.isdigit():
+        await update.message.reply_text(
+            '❌ **إدخال غير صالح!**\n'
+            'الرجاء إدخال رقم معرف تيليجرام **فقط** (مثال: 123456789).',
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        return ADD_VOLUNTEER_FINALIZE
+        
+    telegram_id = int(telegram_id_str)
+    full_name = context.user_data.get('new_volunteer_full_name')
+    team_id = context.user_data.get('new_volunteer_team_id')
+    team_name = context.user_data.get('new_volunteer_team_name')
+
+    # إضافة إلى قاعدة البيانات
+    success = add_new_volunteer_to_db(telegram_id, full_name, team_id)
+    
+    keyboard = [[InlineKeyboardButton("📝 طلب جديد", callback_data='new_request')]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if success:
+        await update.message.reply_text(
+            f"✅ **تمت إضافة المتطوع بنجاح!**\n\n"
+            f"• الاسم: **{full_name}**\n"
+            f"• الفريق: **{team_name}**\n"
+            f"• معرف تيليجرام: `{telegram_id}`",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+    else:
+        await update.message.reply_text(
+            f"❌ **فشل في إضافة المتطوع!**\n\n"
+            f"هناك متطوع آخر مسجل بالفعل بنفس رقم معرف تيليجرام (`{telegram_id}`).\n"
+            f"الرجاء التحقق من الرقم والمحاولة مرة أخرى عبر /admin.",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
 
 # --------------------------------- دوال التحكم والإجراءات ---------------------------------
 
@@ -709,7 +931,6 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 # --------------------------------- المتغير العالمي ---------------------------------
-# **التعديل رقم 1: تعريف كائن التطبيق عالمياً**
 application = None
 
 
@@ -720,11 +941,13 @@ def initialize_application() -> None:
     تقوم بإعداد كائن التطبيق (Application) وإضافة جميع الـ Handlers.
     تُنفذ مرة واحدة فقط عند بدء تشغيل الخادم.
     """
-    global application # نعلن عن استخدام المتغير العالمي
+    global application 
     
     if not BOT_TOKEN or not ADMIN_CHAT_ID:
-        # إثارة خطأ سيوقف Gunicorn عن التشغيل في بيئة الإنتاج
         raise ValueError("BOT_TOKEN or ADMIN_CHAT_ID environment variables not set.")
+
+    # ✅ جديد: تهيئة قاعدة البيانات
+    setup_database()
 
     # 1. بناء التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
@@ -733,18 +956,23 @@ def initialize_application() -> None:
     back_to_menu_handler = CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$')
     text_message_filter = filters.TEXT & ~filters.COMMAND
     
-    # استخدام Raw String (r'...') لتجنب تحذير SyntaxWarning
     admin_action_handler = CallbackQueryHandler(handle_admin_action, pattern=r'^action\|(approve|reject)\|.+$')
+    
+    # ✅ جديد: تعريف معالج أمر المشرف
+    admin_command_handler = CommandHandler('admin', admin_start)
+    application.add_handler(admin_command_handler)
 
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('start', start),
+            CommandHandler('admin', admin_start), # ✅ جديد: نقطة دخول للمشرف
             CallbackQueryHandler(new_request_handler, pattern='^new_request$')
         ],
         states={
             MAIN_MENU: [
                 CallbackQueryHandler(main_menu_choice, pattern='^(apology|leave|feedback|problem)$')
             ],
+            # ... (بقية حالات المتطوعين)
             FIRST_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, first_name)],
             LAST_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, last_name)],
             TEAM_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, team_name)],
@@ -773,7 +1001,19 @@ def initialize_application() -> None:
                 CallbackQueryHandler(problem_notes, pattern='^skip_problem_notes$'),
                 MessageHandler(text_message_filter, problem_notes)
             ],
-            FEEDBACK_MESSAGE: [back_to_menu_handler, MessageHandler(text_message_filter, feedback_message)]
+            FEEDBACK_MESSAGE: [back_to_menu_handler, MessageHandler(text_message_filter, feedback_message)],
+            
+            # ✅ جديد: حالات المشرف لإضافة متطوع
+            ADMIN_MENU: [
+                back_to_menu_handler,
+                CallbackQueryHandler(admin_add_volunteer_prompt, pattern='^admin_add_volunteer$')
+            ],
+            ADD_VOLUNTEER_FULL_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, admin_get_full_name)],
+            ADD_VOLUNTEER_SELECT_TEAM: [
+                back_to_menu_handler, 
+                CallbackQueryHandler(admin_select_team, pattern=r'^team_id\|\d+$')
+            ],
+            ADD_VOLUNTEER_FINALIZE: [back_to_menu_handler, MessageHandler(text_message_filter, admin_finalize_volunteer)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
@@ -796,12 +1036,9 @@ initialize_application()
 
 
 # --------------------------------- دالة WSGI الوسيطة (لتشغيل Gunicorn) ---------------------------------
-# **التعديل رقم 3: الدالة التي يستدعيها Gunicorn**
-
 def wsgi_app(environ, start_response):
     """
     دالة WSGI الوسيطة التي يستدعيها Gunicorn. 
-    تقوم بتمرير طلبات HTTP إلى تطبيق python-telegram-bot.
     """
     if application is None:
         status = '500 INTERNAL SERVER ERROR'
@@ -815,13 +1052,9 @@ def wsgi_app(environ, start_response):
 # --------------------------------- دالة التشغيل المحلية (للتطوير فقط) ---------------------------------
 
 if __name__ == '__main__':
-    # هذا الكود يستخدم فقط إذا قمت بتشغيل الملف مباشرة (مثل python main.py)
-    # وهو يستخدم Polling إذا لم يتم تعيين WEBHOOK_URL
     if not WEBHOOK_URL:
-        # إذا لم يتم تعيين الويب هوك، نقوم بتشغيل البولينج يدوياً
         if application:
             logger.info("يتم التشغيل بـ Polling (تطوير محلي).")
             application.run_polling(allowed_updates=Update.ALL_TYPES)
     else:
         logger.info("تم التهيئة، ومن المتوقع أن يتم التشغيل عبر Gunicorn.")
-
