@@ -25,13 +25,13 @@ logger = logging.getLogger(__name__)
  LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
  FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES) = range(15)
 
-# متغيرات البيئة (Environment Variables)
+# متغيرات البيئة (Environment Variables) - سيتم تعيينها في Render
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 
 # متغيرات خاصة بـ Webhook Render
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # مثال: https://your-bot-name.onrender.com
-PORT = int(os.environ.get('PORT', '5000')) # المنفذ الذي سيتم الاستماع عليه
+WEBHOOK_URL = os.getenv('WEBHOOK_URL') 
+PORT = int(os.environ.get('PORT', '5000')) 
 
 def generate_request_id():
     """توليد رقم طلب فريد"""
@@ -46,13 +46,6 @@ def get_request_title(request_type):
         'feedback': 'الاقتراح/الملاحظة'
     }
     return titles.get(request_type, 'طلب')
-
-# --------------------------------- الدوال الأساسية ---------------------------------
-
-# (باقي الدوال: start, main_menu_choice, first_name, last_name, team_name, apology_type, initiative_name, 
-# apology_reason, apology_notes, leave_start_date, leave_end_date, leave_reason, leave_notes, 
-# problem_description, problem_notes, feedback_message, handle_admin_action, back_to_menu, new_request_handler, cancel)
-# تبقى كما هي بدون تغيير، لضمان أن الكود يكون كاملاً ومحدثاً، سأعيدها في الكتلة النهائية:
 
 # --------------------------------- الدوال الأساسية ---------------------------------
 
@@ -97,7 +90,7 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
 
     choice = query.data
-    context.user_data.clear() # مسح البيانات السابقة عند بدء طلب جديد
+    context.user_data.clear() 
     context.user_data['request_type'] = choice
     context.user_data['request_id'] = generate_request_id()
 
@@ -121,7 +114,6 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return PROBLEM_DESCRIPTION
 
-    # مسار الاعتذار والإجازة يتطلب الاسم والفريق أولاً
     await query.edit_message_text(
         'الرجاء إدخال اسمك الأول:',
         reply_markup=reply_markup
@@ -216,7 +208,6 @@ async def apology_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # إذا اختار المتطوع "مبادرة"، ننتقل لخطوة طلب اسم المبادرة
     if type_choice == 'initiative':
         await query.edit_message_text(
             'الرجاء إدخال **اسم المبادرة** التي تعتذر عنها:',
@@ -225,7 +216,6 @@ async def apology_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         )
         return INITIATIVE_NAME
     else:
-        # باقي الخيارات (اجتماع، آخر) تنتقل مباشرة لسبب الاعتذار
         await query.edit_message_text(
             f'تم اختيار: {context.user_data["apology_type"]}\n\n'
             'الرجاء كتابة سبب الاعتذار بالتفصيل:',
@@ -289,7 +279,6 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     apology_reason = context.user_data.get('apology_reason', 'غير محدد')
     apology_notes = context.user_data.get('apology_notes', 'لا توجد')
 
-    # إضافة اسم المبادرة إذا كانت موجودة
     initiative_name_val = context.user_data.get('initiative_name')
     if initiative_name_val:
         details_line = f'• النوع: {apology_type} ({initiative_name_val})\n'
@@ -326,7 +315,6 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         f'━━━━━━━━━━━━━━━━━'
     )
 
-    # أزرار الإجراء للمشرف
     admin_keyboard = [
         [
             InlineKeyboardButton("✅ موافقة", callback_data=f'action|approve|{request_type}|{request_id}|{user_id}'),
@@ -340,13 +328,11 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # إرسال رسالة التأكيد للمتطوع
     if update.callback_query:
         await message.edit_text(volunteer_message, reply_markup=reply_markup, parse_mode='Markdown')
     else:
         await message.reply_text(volunteer_message, reply_markup=reply_markup, parse_mode='Markdown')
 
-    # إرسال رسالة للمدير
     try:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
@@ -428,7 +414,6 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     first_name = context.user_data.get('first_name', 'غير محدد')
     last_name = context.user_data.get('last_name', 'غير محدد')
     team_name = context.user_data.get('team_name', 'غير محدد')
-    # استخدام التواريخ الجديدة
     leave_start_date = context.user_data.get('leave_start_date', 'غير محدد')
     leave_end_date = context.user_data.get('leave_end_date', 'غير محدد')
     leave_reason = context.user_data.get('leave_reason', 'غير محدد')
@@ -440,8 +425,8 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         f'📋 **ملخص الطلب:**\n'
         f'• الاسم: {first_name} {last_name}\n'
         f'• الفريق: {team_name}\n'
-        f'• تاريخ البدء: {leave_start_date}\n' # مُحدَّث
-        f'• تاريخ الانتهاء: {leave_end_date}\n' # مُحدَّث
+        f'• تاريخ البدء: {leave_start_date}\n'
+        f'• تاريخ الانتهاء: {leave_end_date}\n'
         f'• السبب: {leave_reason}\n'
         f'• ملاحظات: {leave_notes}\n\n'
         f'**أثرك موجود دائماً.. شكراً لأنك معنا 💚**\n\n'
@@ -457,14 +442,13 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         f'🆔 المعرف: @{user.username or "لا يوجد"}\n'
         f'🆔 رقم المستخدم: {user_id}\n\n'
         f'📋 **التفاصيل:**\n'
-        f'• تاريخ بدء الإجازة: {leave_start_date}\n' # مُحدَّث
-        f'• تاريخ انتهاء الإجازة: {leave_end_date}\n' # مُحدَّث
+        f'• تاريخ بدء الإجازة: {leave_start_date}\n'
+        f'• تاريخ انتهاء الإجازة: {leave_end_date}\n'
         f'• سبب الإجازة: {leave_reason}\n'
         f'• ملاحظات: {leave_notes}\n'
         f'━━━━━━━━━━━━━━━━━'
     )
 
-    # أزرار الإجراء للمشرف
     admin_keyboard = [
         [
             InlineKeyboardButton("✅ موافقة", callback_data=f'action|approve|{request_type}|{request_id}|{user_id}'),
@@ -478,13 +462,11 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # إرسال رسالة التأكيد للمتطوع
     if update.callback_query:
         await message.edit_text(volunteer_message, reply_markup=reply_markup, parse_mode='Markdown')
     else:
         await message.reply_text(volunteer_message, reply_markup=reply_markup, parse_mode='Markdown')
 
-    # إرسال رسالة للمدير
     try:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
@@ -559,7 +541,6 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         f'━━━━━━━━━━━━━━━━━'
     )
 
-    # أزرار الإجراء للمشرف
     admin_keyboard = [
         [
             InlineKeyboardButton("✅ موافقة", callback_data=f'action|approve|{request_type}|{request_id}|{user_id}'),
@@ -573,13 +554,11 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # إرسال رسالة التأكيد للمتطوع
     if update.callback_query:
         await message.edit_text(volunteer_message, reply_markup=reply_markup, parse_mode='Markdown')
     else:
         await message.reply_text(volunteer_message, reply_markup=reply_markup, parse_mode='Markdown')
 
-    # إرسال رسالة للمدير
     try:
         await context.bot.send_message(
             chat_id=ADMIN_CHAT_ID,
@@ -621,7 +600,6 @@ async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f'━━━━━━━━━━━━━━━━━'
     )
 
-    # أزرار الإجراء للمشرف - (الاقتراحات لا تحتاج موافقة/رفض بالضرورة، لكن نضيفها لتوحيد الواجهة)
     admin_keyboard = [
         [
             InlineKeyboardButton("✅ تم الاطلاع", callback_data=f'action|approve|{request_type}|{request_id}|{user_id}'),
@@ -657,7 +635,6 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     await query.answer()
 
-    # parse callback_data: action|approve/reject|request_type|request_id|user_id
     data = query.data.split('|')
     action = data[1]
     request_type = data[2]
@@ -667,7 +644,6 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     admin_user = query.from_user
     request_title = get_request_title(request_type)
 
-    # 1. إشعار المستخدم الأصلي
     try:
         if action == 'approve':
             user_notification = f'✅ تهانينا! تمت **الموافقة** على {request_title} الخاص بك برقم `{request_id}`.'
@@ -685,10 +661,8 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"خطأ في إرسال الإشعار للمستخدم {user_id}: {e}")
 
-    # 2. تحديث رسالة المشرف (الرسالة الأصلية)
     status_text = "تمت الموافقة ✅" if action == 'approve' else "تم الرفض ❌"
 
-    # تحديث محتوى الرسالة الأصلية للمشرف
     original_text = query.message.text
     updated_text = (
         f"{original_text}\n\n"
@@ -700,7 +674,7 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         await query.edit_message_text(
             text=updated_text,
-            reply_markup=None, # إزالة الأزرار
+            reply_markup=None, 
             parse_mode='Markdown'
         )
     except Exception as e:
@@ -734,27 +708,30 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-def main_setup() -> Application:
-    """إعداد كائن التطبيق (Application) وإعادة تعريفه ليتم تشغيله بواسطة Gunicorn"""
+# --------------------------------- دالة الإعداد القابلة للاستدعاء ---------------------------------
+
+def application_callable() -> Application:
+    """
+    تقوم بإعداد كائن التطبيق (Application).
+    هذه الدالة سيتم استدعاؤها بواسطة Gunicorn عند تشغيل خدمة الويب.
+    """
     if not BOT_TOKEN:
         logger.error("خطأ: BOT_TOKEN غير موجود!")
-        # يمكن إرجاع Application وهمي أو إثارة خطأ هنا
+        # إثارة خطأ سيجعل Gunicorn يتوقف عن التشغيل
         raise ValueError("BOT_TOKEN environment variable not set.")
 
     if not ADMIN_CHAT_ID:
         logger.error("خطأ: ADMIN_CHAT_ID غير موجود!")
-        # يمكن إرجاع Application وهمي أو إثارة خطأ هنا
         raise ValueError("ADMIN_CHAT_ID environment variable not set.")
 
 
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # توحيد معالجة زر العودة
     back_to_menu_handler = CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$')
     text_message_filter = filters.TEXT & ~filters.COMMAND
-
-    # معالج إجراءات الموافقة/الرفض للمشرف
-    admin_action_handler = CallbackQueryHandler(handle_admin_action, pattern='^action\|(approve|reject)\|.+$')
+    
+    # استخدام Raw String (r'...') لتجنب تحذير SyntaxWarning
+    admin_action_handler = CallbackQueryHandler(handle_admin_action, pattern=r'^action\|(approve|reject)\|.+$')
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -765,12 +742,9 @@ def main_setup() -> Application:
             MAIN_MENU: [
                 CallbackQueryHandler(main_menu_choice, pattern='^(apology|leave|feedback|problem)$')
             ],
-            # مسارات تتطلب الاسم والفريق أولاً (اعتذار وإجازة)
             FIRST_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, first_name)],
             LAST_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, last_name)],
             TEAM_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, team_name)],
-
-            # مسار الاعتذار
             APOLOGY_TYPE: [
                 back_to_menu_handler,
                 CallbackQueryHandler(apology_type, pattern='^(meeting|initiative|other)$')
@@ -782,8 +756,6 @@ def main_setup() -> Application:
                 CallbackQueryHandler(apology_notes, pattern='^skip_apology_notes$'),
                 MessageHandler(text_message_filter, apology_notes)
             ],
-
-            # مسار الإجازة
             LEAVE_START_DATE: [back_to_menu_handler, MessageHandler(text_message_filter, leave_start_date)],
             LEAVE_END_DATE: [back_to_menu_handler, MessageHandler(text_message_filter, leave_end_date)],
             LEAVE_REASON: [back_to_menu_handler, MessageHandler(text_message_filter, leave_reason)],
@@ -792,16 +764,12 @@ def main_setup() -> Application:
                 CallbackQueryHandler(leave_notes, pattern='^skip_leave_notes$'),
                 MessageHandler(text_message_filter, leave_notes)
             ],
-
-            # مسار المشاكل (مستقل)
             PROBLEM_DESCRIPTION: [back_to_menu_handler, MessageHandler(text_message_filter, problem_description)],
             PROBLEM_NOTES: [
                 back_to_menu_handler,
                 CallbackQueryHandler(problem_notes, pattern='^skip_problem_notes$'),
                 MessageHandler(text_message_filter, problem_notes)
             ],
-
-            # مسار الاقتراحات (مستقل)
             FEEDBACK_MESSAGE: [back_to_menu_handler, MessageHandler(text_message_filter, feedback_message)]
         },
         fallbacks=[CommandHandler('cancel', cancel)]
@@ -812,29 +780,28 @@ def main_setup() -> Application:
     
     return application
 
-# يتم تعريف application_instance هنا ليتمكن Gunicorn من استدعائها
-application_instance = main_setup()
-
+# --------------------------------- دالة التشغيل الرئيسية ---------------------------------
 
 def start_webhook() -> None:
-    """تشغيل البوت باستخدام Webhooks على Render"""
-    global application_instance
+    """تشغيل البوت باستخدام Webhooks أو Polling (للاختبار المحلي)"""
     
+    # 1. الحصول على كائن التطبيق
+    app_instance = application_callable() 
+    
+    # 2. بدء التشغيل
     if WEBHOOK_URL:
         logger.info("يتم التشغيل في بيئة Webhook...")
-        # تعيين Webhook (إخبار تليجرام بعنوان URL الخاص بك)
-        application_instance.run_webhook(
-            listen="0.0.0.0",  # الاستماع على جميع الواجهات
+        # إخبار تليجرام بعنوان URL الخاص بك
+        app_instance.run_webhook( 
+            listen="0.0.0.0",
             port=PORT,
-            url_path=BOT_TOKEN,  # استخدام التوكن كمسار (path) سري
+            url_path=BOT_TOKEN,
             webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
         )
         logger.info(f"البوت بدأ العمل على Webhook URL: {WEBHOOK_URL}/{BOT_TOKEN}")
     else:
         logger.warning("لم يتم تعيين WEBHOOK_URL. يتم التشغيل بـ Polling (للتطوير المحلي فقط).")
-        application_instance.run_polling(allowed_updates=Update.ALL_TYPES)
+        app_instance.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
-    # يتم استدعاء start_webhook مباشرة لتشغيل البوت في حال لم يكن Gunicorn يعمل
-    # في بيئة Render، سيقوم Gunicorn باستدعاء application_instance مباشرة.
     start_webhook()
