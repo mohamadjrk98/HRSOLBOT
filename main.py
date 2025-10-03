@@ -708,25 +708,28 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 
-# --------------------------------- دالة الإعداد القابلة للاستدعاء ---------------------------------
+# --------------------------------- المتغير العالمي ---------------------------------
+# **التعديل رقم 1: تعريف كائن التطبيق عالمياً**
+application = None
 
-def application_callable() -> Application:
+
+# --------------------------------- دالة الإعداد التي تُنفذ مرة واحدة ---------------------------------
+
+def initialize_application() -> None:
     """
-    تقوم بإعداد كائن التطبيق (Application).
-    هذه الدالة سيتم استدعاؤها بواسطة Gunicorn عند تشغيل خدمة الويب.
+    تقوم بإعداد كائن التطبيق (Application) وإضافة جميع الـ Handlers.
+    تُنفذ مرة واحدة فقط عند بدء تشغيل الخادم.
     """
-    if not BOT_TOKEN:
-        logger.error("خطأ: BOT_TOKEN غير موجود!")
-        # إثارة خطأ سيجعل Gunicorn يتوقف عن التشغيل
-        raise ValueError("BOT_TOKEN environment variable not set.")
+    global application # نعلن عن استخدام المتغير العالمي
+    
+    if not BOT_TOKEN or not ADMIN_CHAT_ID:
+        # إثارة خطأ سيوقف Gunicorn عن التشغيل في بيئة الإنتاج
+        raise ValueError("BOT_TOKEN or ADMIN_CHAT_ID environment variables not set.")
 
-    if not ADMIN_CHAT_ID:
-        logger.error("خطأ: ADMIN_CHAT_ID غير موجود!")
-        raise ValueError("ADMIN_CHAT_ID environment variable not set.")
-
-
+    # 1. بناء التطبيق
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # 2. إضافة الـ Handlers
     back_to_menu_handler = CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$')
     text_message_filter = filters.TEXT & ~filters.COMMAND
     
@@ -778,30 +781,47 @@ def application_callable() -> Application:
     application.add_handler(conv_handler)
     application.add_handler(admin_action_handler)
     
-    return application
-
-# --------------------------------- دالة التشغيل الرئيسية ---------------------------------
-
-def start_webhook() -> None:
-    """تشغيل البوت باستخدام Webhooks أو Polling (للاختبار المحلي)"""
-    
-    # 1. الحصول على كائن التطبيق
-    app_instance = application_callable() 
-    
-    # 2. بدء التشغيل
+    # 3. إعداد الـ Webhook
     if WEBHOOK_URL:
-        logger.info("يتم التشغيل في بيئة Webhook...")
-        # إخبار تليجرام بعنوان URL الخاص بك
-        app_instance.run_webhook( 
+        application.run_webhook( 
             listen="0.0.0.0",
             port=PORT,
             url_path=BOT_TOKEN,
             webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
         )
-        logger.info(f"البوت بدأ العمل على Webhook URL: {WEBHOOK_URL}/{BOT_TOKEN}")
-    else:
-        logger.warning("لم يتم تعيين WEBHOOK_URL. يتم التشغيل بـ Polling (للتطوير المحلي فقط).")
-        app_instance.run_polling(allowed_updates=Update.ALL_TYPES)
+        logger.info(f"الويب هوك تم إعداده: {WEBHOOK_URL}/{BOT_TOKEN}")
+
+# ** يتم استدعاء دالة التهيئة عند تحميل الوحدة (Module) **
+initialize_application()
+
+
+# --------------------------------- دالة WSGI الوسيطة (لتشغيل Gunicorn) ---------------------------------
+# **التعديل رقم 3: الدالة التي يستدعيها Gunicorn**
+
+def wsgi_app(environ, start_response):
+    """
+    دالة WSGI الوسيطة التي يستدعيها Gunicorn. 
+    تقوم بتمرير طلبات HTTP إلى تطبيق python-telegram-bot.
+    """
+    if application is None:
+        status = '500 INTERNAL SERVER ERROR'
+        headers = [('Content-type', 'text/plain')]
+        start_response(status, headers)
+        return [b"Application not initialized."]
+        
+    return application.webhooks(environ, start_response)
+
+
+# --------------------------------- دالة التشغيل المحلية (للتطوير فقط) ---------------------------------
 
 if __name__ == '__main__':
-    start_webhook()
+    # هذا الكود يستخدم فقط إذا قمت بتشغيل الملف مباشرة (مثل python main.py)
+    # وهو يستخدم Polling إذا لم يتم تعيين WEBHOOK_URL
+    if not WEBHOOK_URL:
+        # إذا لم يتم تعيين الويب هوك، نقوم بتشغيل البولينج يدوياً
+        if application:
+            logger.info("يتم التشغيل بـ Polling (تطوير محلي).")
+            application.run_polling(allowed_updates=Update.ALL_TYPES)
+    else:
+        logger.info("تم التهيئة، ومن المتوقع أن يتم التشغيل عبر Gunicorn.")
+
