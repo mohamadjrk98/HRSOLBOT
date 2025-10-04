@@ -2,7 +2,7 @@ import logging
 import os
 import time
 import sqlite3 
-import re # 🌟 التعديل 1: تم إضافة استيراد مكتبة التعبيرات النمطية
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -14,29 +14,23 @@ from telegram.ext import (
     filters,
 )
 
-# إعدادات التسجيل (Logging)
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --------------------------------- إعداد قاعدة البيانات ---------------------------------
-
 DB_NAME = 'volunteers_system.db'
 
 def get_db_connection():
-    """إنشاء اتصال بقاعدة بيانات SQLite"""
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
 
 def setup_database():
-    """إنشاء جدولي الفرق والمتطوعين وتعبئة بعض الفرق المبدئية"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # 1. Teams Table (الفرق)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Teams (
             id INTEGER PRIMARY KEY,
@@ -44,7 +38,6 @@ def setup_database():
         )
     ''')
     
-    # 2. Volunteers Table (المتطوعون)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Volunteers (
             id INTEGER PRIMARY KEY,
@@ -56,7 +49,6 @@ def setup_database():
         )
     ''')
 
-    # إضافة فرق مبدئية إذا لم تكن موجودة
     initial_teams = [('فريق الدعم الأول',), ('فريق الدعم الثاني',), ('فريق المتابعة',)]
     for team in initial_teams:
         try:
@@ -68,14 +60,12 @@ def setup_database():
     conn.close()
 
 def get_all_teams():
-    """جلب جميع الفرق من قاعدة البيانات"""
     conn = get_db_connection()
     teams = conn.execute("SELECT id, name FROM Teams").fetchall()
     conn.close()
     return teams
 
 def add_new_volunteer_to_db(telegram_id, full_name, team_id):
-    """إدراج متطوع جديد في جدول المتطوعين"""
     conn = get_db_connection()
     try:
         conn.execute(
@@ -90,36 +80,27 @@ def add_new_volunteer_to_db(telegram_id, full_name, team_id):
         return False
 
 def is_admin(chat_id):
-    """التحقق مما إذا كان المستخدم هو المشرف"""
     if not ADMIN_CHAT_ID:
         return False
-    # المقارنة كسلسلة نصية آمنة
     return str(chat_id) == str(ADMIN_CHAT_ID)
 
 
-# --------------------------------- تعريف الحالات (States) ---------------------------------
-
-# الحالات (States) المستخدمة في ConversationHandler
 (MAIN_MENU, FIRST_NAME, LAST_NAME, TEAM_NAME, 
  APOLOGY_TYPE, INITIATIVE_NAME, APOLOGY_REASON, APOLOGY_NOTES,
  LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
  FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES,
  ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM, ADD_VOLUNTEER_FINALIZE, ADD_VOLUNTEER_TELEGRAM_ID) = range(20)
 
-# متغيرات البيئة (Environment Variables)
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
 
-# متغيرات خاصة بـ Webhook Render
 WEBHOOK_URL = os.getenv('WEBHOOK_URL') 
 PORT = int(os.environ.get('PORT', '5000')) 
 
 def generate_request_id():
-    """توليد رقم طلب فريد"""
     return f"REQ{int(time.time())}"
 
 def get_request_title(request_type):
-    """جلب عنوان الطلب بناءً على نوعه"""
     titles = {
         'apology': 'طلب الاعتذار',
         'leave': 'طلب الإجازة',
@@ -128,10 +109,7 @@ def get_request_title(request_type):
     }
     return titles.get(request_type, 'طلب')
 
-# --------------------------------- الدوال الأساسية ---------------------------------
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """البداية - عرض القائمة الرئيسية"""
     query = update.callback_query
     if query:
         await query.answer()
@@ -148,7 +126,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("💡 اقتراحات وملاحظات", callback_data='feedback')]
     ]
 
-    # إضافة زر لوحة المشرف إذا كان المستخدم هو المدير
     if is_admin(user.id):
         keyboard.append([InlineKeyboardButton("⚙️ لوحة المشرف", callback_data='admin_menu')])
         
@@ -168,10 +145,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     return MAIN_MENU
 
-# --------------------------------- دوال لوحة المشرف ---------------------------------
-
 async def admin_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """عرض قائمة المشرف - للدخول عبر /admin"""
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("❌ غير مصرح لك بالدخول إلى هذه القائمة.")
         return MAIN_MENU
@@ -180,7 +154,6 @@ async def admin_menu_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def admin_menu_display(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """عرض قائمة المشرف - للدخول عبر Callback"""
     query = update.callback_query
     if query:
         await query.answer()
@@ -212,14 +185,13 @@ async def admin_menu_display(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ADMIN_MENU
 
 async def admin_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """معالجة خيارات قائمة المشرف"""
     query = update.callback_query
     await query.answer()
     
     choice = query.data
     
     if choice == 'add_volunteer':
-        context.user_data.clear() # بدء محادثة جديدة للإضافة
+        context.user_data.clear() 
         
         keyboard = [[InlineKeyboardButton("🔙 عودة لقائمة المشرف", callback_data='admin_menu')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -240,7 +212,6 @@ async def admin_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return ADMIN_MENU
 
 async def add_volunteer_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الاسم الكامل وطلب رقم تعريف تيليجرام"""
     context.user_data['new_volunteer_full_name'] = update.message.text
     
     keyboard = [[InlineKeyboardButton("🔙 عودة لقائمة المشرف", callback_data='admin_menu')]]
@@ -255,10 +226,8 @@ async def add_volunteer_full_name(update: Update, context: ContextTypes.DEFAULT_
     return ADD_VOLUNTEER_TELEGRAM_ID
 
 async def add_volunteer_telegram_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ رقم تعريف تيليجرام وعرض قائمة الفرق"""
     telegram_id_str = update.message.text.strip()
     
-    # التحقق من أن المدخل هو رقم
     if not telegram_id_str.isdigit():
         await update.message.reply_text(
             "⚠️ الرجاء إدخال رقم تعريف تيليجرام **صحيح** (رقم فقط).",
@@ -271,9 +240,7 @@ async def add_volunteer_telegram_id(update: Update, context: ContextTypes.DEFAUL
     teams = get_all_teams()
     keyboard = []
     
-    # بناء أزرار الفرق
     for team in teams:
-        # callback_data: team_select|team_id|team_name
         callback_data = f"team_select|{team['id']}|{team['name']}"
         keyboard.append([InlineKeyboardButton(team['name'], callback_data=callback_data)])
         
@@ -289,11 +256,9 @@ async def add_volunteer_telegram_id(update: Update, context: ContextTypes.DEFAUL
     return ADD_VOLUNTEER_SELECT_TEAM
 
 async def add_volunteer_select_team(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """معالجة اختيار الفريق وإنهاء عملية الإضافة"""
     query = update.callback_query
     await query.answer()
 
-    # فك تشفير البيانات: team_select|team_id|team_name
     data_parts = query.data.split('|')
     team_id = int(data_parts[1])
     team_name = data_parts[2]
@@ -301,7 +266,6 @@ async def add_volunteer_select_team(update: Update, context: ContextTypes.DEFAUL
     full_name = context.user_data.get('new_volunteer_full_name')
     telegram_id = context.user_data.get('new_volunteer_telegram_id')
 
-    # محاولة الإضافة إلى قاعدة البيانات
     success = add_new_volunteer_to_db(telegram_id, full_name, team_id)
     
     if success:
@@ -328,10 +292,7 @@ async def add_volunteer_select_team(update: Update, context: ContextTypes.DEFAUL
     await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
     return ADMIN_MENU
 
-# --------------------------------- دوال الطلبات العادية ---------------------------------
-
 async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """معالجة اختيار القائمة الرئيسية"""
     query = update.callback_query
     await query.answer()
 
@@ -367,7 +328,6 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return FIRST_NAME
 
 async def first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الاسم الأول وطلب الكنية"""
     context.user_data['first_name'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
@@ -382,7 +342,6 @@ async def first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الكنية وطلب اسم الفريق"""
     context.user_data['last_name'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
@@ -397,7 +356,6 @@ async def last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ اسم الفريق والانتقال حسب نوع الطلب"""
     context.user_data['team_name'] = update.message.text
     request_type = context.user_data.get('request_type')
 
@@ -434,7 +392,6 @@ async def team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return MAIN_MENU
     
 async def apology_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ نوع الفعالية والتوجيه حسب نوعها (مبادرة أم غيرها)"""
     query = update.callback_query
     await query.answer()
 
@@ -466,7 +423,6 @@ async def apology_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return APOLOGY_REASON
 
 async def initiative_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ اسم المبادرة وطلب سبب الاعتذار"""
     context.user_data['initiative_name'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
@@ -481,7 +437,6 @@ async def initiative_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def apology_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ سبب الاعتذار وطلب الملاحظات"""
     context.user_data['apology_reason'] = update.message.text
 
     keyboard = [
@@ -499,7 +454,6 @@ async def apology_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الملاحظات وإرسال الطلب للمدير"""
     message = update.message
     if update.callback_query:
         query = update.callback_query
@@ -590,7 +544,6 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 async def leave_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ تاريخ بدء الإجازة وطلب تاريخ الانتهاء"""
     context.user_data['leave_start_date'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
@@ -605,7 +558,6 @@ async def leave_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return LEAVE_END_DATE
 
 async def leave_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ تاريخ انتهاء الإجازة وطلب السبب"""
     context.user_data['leave_end_date'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
@@ -620,7 +572,6 @@ async def leave_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def leave_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ سبب الإجازة وطلب الملاحظات"""
     context.user_data['leave_reason'] = update.message.text
 
     keyboard = [
@@ -638,7 +589,6 @@ async def leave_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الملاحظات وإرسال الطلب للمدير"""
     message = update.message
     if update.callback_query:
         query = update.callback_query
@@ -722,7 +672,6 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 async def problem_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ وصف المشكلة وطلب الملاحظات"""
     context.user_data['problem_description'] = update.message.text
 
     keyboard = [
@@ -740,7 +689,6 @@ async def problem_description(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الملاحظات وإرسال الطلب للمدير"""
     message = update.message
     if update.callback_query:
         query = update.callback_query
@@ -757,7 +705,6 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     problem_description = context.user_data.get('problem_description', 'غير محدد')
     problem_notes = context.user_data.get('problem_notes', 'لا توجد')
     
-    # رسالة المتطوع
     volunteer_message = (
         f'✅ **تم استلام بلاغ المشكلة!**\n\n'
         f'🔖 رقم الطلب: `{request_id}`\n\n'
@@ -767,14 +714,13 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         f'سيتم النظر في المشكلة وإبلاغك بالتحديثات.'
     )
 
-    # رسالة المدير
     admin_message = (
         f'🔧 **بلاغ مشكلة جديد**\n'
         f'━━━━━━━━━━━━━━━━━\n'
         f'🔖 رقم الطلب: `{request_id}`\n'
         f'👤 المبلغ: {user.first_name} {user.last_name or ""}\n'
         f'🆔 المعرف: @{user.username or "لا يوجد"}\n'
-        f'🆔 رقم المستخدم: {user_id}\n\n'
+        f'🆔 رقم المستخدم: {user.id}\n\n'
         f'📋 **التفاصيل:**\n'
         f'• وصف المشكلة: {problem_description}\n'
         f'• ملاحظات: {problem_notes}\n'
@@ -813,7 +759,6 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     return ConversationHandler.END
     
 async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ رسالة الاقتراح وإرسالها للمدير"""
     context.user_data['feedback_message'] = update.message.text
 
     user = update.effective_user
@@ -821,7 +766,6 @@ async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     request_type = context.user_data.get('request_type', 'feedback')
     feedback_text = update.message.text
     
-    # رسالة المتطوع
     volunteer_message = (
         f'✅ **تم استلام اقتراحك/ملاحظتك!**\n\n'
         f'🔖 رقم الطلب: `{request_id}`\n\n'
@@ -829,7 +773,6 @@ async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         f'تم إرسال الاقتراح للمراجعة.'
     )
 
-    # رسالة المدير
     admin_message = (
         f'💡 **اقتراح/ملاحظة جديدة**\n'
         f'━━━━━━━━━━━━━━━━━\n'
@@ -861,32 +804,23 @@ async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context.user_data.clear()
     return ConversationHandler.END
 
-
-# --------------------------------- دالة الـ Callbacks (تعديل دالة شاملة) ---------------------------------
-
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """معالج شامل لكل ضغطات أزرار Inline Keyboard غير المرتبطة بمحادثة"""
     query = update.callback_query
     await query.answer()
     
     data = query.data
     
-    # 1. حالة العودة إلى القائمة الرئيسية / طلب جديد
     if data == 'back_to_menu' or data == 'new_request':
         if context.user_data:
              context.user_data.clear()
-        # نستخدم دالة start للعودة
         return await start(update, context) 
 
-    # 2. حالة الدخول إلى قائمة المشرف
     elif data == 'admin_menu':
         return await admin_menu_display(update, context) 
 
-    # 3. حالة بدأ محادثة إضافة متطوع من قائمة المشرف
     elif data == 'add_volunteer':
         return await admin_menu_choice(update, context) 
 
-    # 4. حالة قبول/رفض طلب (للمدير)
     elif data.startswith('action|'):
         parts = data.split('|')
         action, request_type, request_id, user_id = parts[1], parts[2], parts[3], parts[4]
@@ -895,10 +829,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             user_message = f"تم **{'قبول' if action == 'approve' else 'رفض'}** {get_request_title(request_type)} الخاص بك: `{request_id}`."
             
             try:
-                # إرسال إشعار للمستخدم
                 await context.bot.send_message(chat_id=user_id, text=user_message, parse_mode='Markdown')
                 
-                # تعديل رسالة الطلب للمدير
                 await query.edit_message_text(
                     query.message.text + 
                     f'\n\n✅ **تم الرد من قبل {query.from_user.first_name}: {action.upper()}**',
@@ -911,23 +843,17 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         else:
             await query.answer("❌ غير مصرح لك باتخاذ هذا الإجراء.")
             
-        return MAIN_MENU # ننهي معالجة الـ callback
+        return MAIN_MENU 
 
-    # 5. تمرير ضغطات الأزرار الأخرى التي تبدأ محادثة إلى الدالة المناسبة (طلبات المتطوعين)
     if data in ['apology', 'leave', 'problem', 'feedback']:
         return await main_menu_choice(update, context)
 
-    # 6. معالجة التخطي (في نهاية المحادثات)
     if data.startswith('skip_'):
-        pass # هذه يتم معالجتها داخل دوال المحادثة
+        pass
         
     return MAIN_MENU
 
-
-# --------------------------------- دالة الإلغاء ---------------------------------
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """إلغاء المحادثة وإرجاع المستخدم للقائمة الرئيسية"""
     user = update.effective_user
     logger.info("المستخدم %s ألغى المحادثة.", user.first_name)
     
@@ -950,12 +876,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     return ConversationHandler.END
 
-
-# --------------------------------- الدالة الرئيسية ---------------------------------
-
 def main() -> None:
-    """تشغيل البوت"""
-    # تهيئة قاعدة البيانات عند بدء التشغيل
     setup_database()
     
     if not BOT_TOKEN:
@@ -964,11 +885,8 @@ def main() -> None:
 
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # 🌟 التعديل الحاسم: تعريف فلتر نصوص أكثر موثوقية (لحل مشكلة عدم الاستجابة)
-    # هذا الفلتر يجمع الرسائل النصية التي ليست أوامر (Commands)
     RELIABLE_TEXT_FILTER = filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND 
     
-    # محادثة الطلبات الرئيسية (وتم دمج مسار إضافة المتطوعين فيها لتجنب أخطاء NameError)
     main_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("admin", admin_menu_start, filters=filters.Chat(chat_id=ADMIN_CHAT_ID))],
         states={
@@ -976,13 +894,10 @@ def main() -> None:
                 CallbackQueryHandler(handle_callback_query, pattern='^apology$|^leave$|^problem$|^feedback$|^admin_menu$')
             ],
             
-            # --- مسار الطلبات العادية ---
-            # تم استخدام الفلتر الجديد في جميع حالات الإدخال النصي
             FIRST_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, first_name)],
             LAST_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, last_name)],
             TEAM_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, team_name)],
             
-            # مسار الاعتذار
             APOLOGY_TYPE: [CallbackQueryHandler(apology_type, pattern='^meeting$|^initiative$|^other$')],
             INITIATIVE_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, initiative_name)],
             APOLOGY_REASON: [MessageHandler(RELIABLE_TEXT_FILTER, apology_reason)],
@@ -991,7 +906,6 @@ def main() -> None:
                 CallbackQueryHandler(apology_notes, pattern='^skip_apology_notes$')
             ],
 
-            # مسار الإجازة
             LEAVE_START_DATE: [MessageHandler(RELIABLE_TEXT_FILTER, leave_start_date)],
             LEAVE_END_DATE: [MessageHandler(RELIABLE_TEXT_FILTER, leave_end_date)],
             LEAVE_REASON: [MessageHandler(RELIABLE_TEXT_FILTER, leave_reason)],
@@ -1000,24 +914,20 @@ def main() -> None:
                 CallbackQueryHandler(leave_notes, pattern='^skip_leave_notes$')
             ],
 
-            # مسار المشكلة
             PROBLEM_DESCRIPTION: [MessageHandler(RELIABLE_TEXT_FILTER, problem_description)],
             PROBLEM_NOTES: [
                 MessageHandler(RELIABLE_TEXT_FILTER, problem_notes),
                 CallbackQueryHandler(problem_notes, pattern='^skip_problem_notes$')
             ],
 
-            # مسار الاقتراح/الملاحظة
             FEEDBACK_MESSAGE: [MessageHandler(RELIABLE_TEXT_FILTER, feedback_message)],
             
-            # --- مسار المدير ---
             ADMIN_MENU: [
                 CallbackQueryHandler(admin_menu_choice, pattern='^add_volunteer$|^view_volunteers$')
             ],
-            # مسار إضافة المتطوعين (مدمج في المحادثة الرئيسية)
+            
             ADD_VOLUNTEER_FULL_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_full_name)],
             ADD_VOLUNTEER_TELEGRAM_ID: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_telegram_id)],
-            # 🌟 التعديل 2: تم تصحيح الـ pattern باستخدام re.escape لتجنب SyntaxWarning
             ADD_VOLUNTEER_SELECT_TEAM: [CallbackQueryHandler(add_volunteer_select_team, pattern='^' + re.escape('team_select|'))]
         },
         fallbacks=[
@@ -1027,15 +937,11 @@ def main() -> None:
         ]
     )
     
-    # معالج الـ Callback الشامل (للأزرار التي خارج المحادثات)
     application.add_handler(CallbackQueryHandler(handle_callback_query))
     
-    # إضافة المحادثة الرئيسية
     application.add_handler(main_conv)
 
-    # 5. تشغيل البوت عبر Webhook (لبيئات الاستضافة مثل Render)
     if WEBHOOK_URL:
-        # إعداد Webhook
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
@@ -1044,7 +950,6 @@ def main() -> None:
         )
         logger.info(f"البوت يعمل عبر Webhook على البورت {PORT}")
     else:
-        # تشغيل عادي (Polling)
         logger.info("البوت يعمل عبر Polling")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
 
