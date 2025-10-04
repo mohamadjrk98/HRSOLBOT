@@ -1,7 +1,8 @@
-Import logging
+import logging
 import os
 import time
 import sqlite3 
+import re # 🌟 التعديل 1: تم إضافة استيراد مكتبة التعبيرات النمطية
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -963,8 +964,8 @@ def main() -> None:
 
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # 🌟 التعديل الحاسم: تعريف فلتر نصوص أكثر موثوقية 🌟
-    # هذا يحل مشكلة "صمت البوت" بعد ضغط زر وتحويل الحالة
+    # 🌟 التعديل الحاسم: تعريف فلتر نصوص أكثر موثوقية (لحل مشكلة عدم الاستجابة)
+    # هذا الفلتر يجمع الرسائل النصية التي ليست أوامر (Commands)
     RELIABLE_TEXT_FILTER = filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND 
     
     # محادثة الطلبات الرئيسية (وتم دمج مسار إضافة المتطوعين فيها لتجنب أخطاء NameError)
@@ -1016,7 +1017,8 @@ def main() -> None:
             # مسار إضافة المتطوعين (مدمج في المحادثة الرئيسية)
             ADD_VOLUNTEER_FULL_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_full_name)],
             ADD_VOLUNTEER_TELEGRAM_ID: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_telegram_id)],
-            ADD_VOLUNTEER_SELECT_TEAM: [CallbackQueryHandler(add_volunteer_select_team, pattern='^team_select\|')]
+            # 🌟 التعديل 2: تم تصحيح الـ pattern باستخدام re.escape لتجنب SyntaxWarning
+            ADD_VOLUNTEER_SELECT_TEAM: [CallbackQueryHandler(add_volunteer_select_team, pattern='^' + re.escape('team_select|'))]
         },
         fallbacks=[
             CommandHandler('cancel', cancel),
