@@ -885,7 +885,8 @@ def main() -> None:
 
     application = Application.builder().token(BOT_TOKEN).build()
     
-    RELIABLE_TEXT_FILTER = filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND 
+    # فلتر بسيط وموثوق للنصوص التي ليست أوامر
+    TEXT_MESSAGE_FILTER = filters.TEXT & ~filters.COMMAND 
     
     main_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("admin", admin_menu_start, filters=filters.Chat(chat_id=ADMIN_CHAT_ID))],
@@ -894,40 +895,41 @@ def main() -> None:
                 CallbackQueryHandler(handle_callback_query, pattern='^apology$|^leave$|^problem$|^feedback$|^admin_menu$')
             ],
             
-            FIRST_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, first_name)],
-            LAST_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, last_name)],
-            TEAM_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, team_name)],
+            # تم التعديل لاستخدام TEXT_MESSAGE_FILTER لضمان التقاط الرسالة
+            FIRST_NAME: [MessageHandler(TEXT_MESSAGE_FILTER, first_name)],
+            LAST_NAME: [MessageHandler(TEXT_MESSAGE_FILTER, last_name)],
+            TEAM_NAME: [MessageHandler(TEXT_MESSAGE_FILTER, team_name)],
             
             APOLOGY_TYPE: [CallbackQueryHandler(apology_type, pattern='^meeting$|^initiative$|^other$')],
-            INITIATIVE_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, initiative_name)],
-            APOLOGY_REASON: [MessageHandler(RELIABLE_TEXT_FILTER, apology_reason)],
+            INITIATIVE_NAME: [MessageHandler(TEXT_MESSAGE_FILTER, initiative_name)],
+            APOLOGY_REASON: [MessageHandler(TEXT_MESSAGE_FILTER, apology_reason)],
             APOLOGY_NOTES: [
-                MessageHandler(RELIABLE_TEXT_FILTER, apology_notes),
+                MessageHandler(TEXT_MESSAGE_FILTER, apology_notes),
                 CallbackQueryHandler(apology_notes, pattern='^skip_apology_notes$')
             ],
 
-            LEAVE_START_DATE: [MessageHandler(RELIABLE_TEXT_FILTER, leave_start_date)],
-            LEAVE_END_DATE: [MessageHandler(RELIABLE_TEXT_FILTER, leave_end_date)],
-            LEAVE_REASON: [MessageHandler(RELIABLE_TEXT_FILTER, leave_reason)],
+            LEAVE_START_DATE: [MessageHandler(TEXT_MESSAGE_FILTER, leave_start_date)],
+            LEAVE_END_DATE: [MessageHandler(TEXT_MESSAGE_FILTER, leave_end_date)],
+            LEAVE_REASON: [MessageHandler(TEXT_MESSAGE_FILTER, leave_reason)],
             LEAVE_NOTES: [
-                MessageHandler(RELIABLE_TEXT_FILTER, leave_notes),
+                MessageHandler(TEXT_MESSAGE_FILTER, leave_notes),
                 CallbackQueryHandler(leave_notes, pattern='^skip_leave_notes$')
             ],
 
-            PROBLEM_DESCRIPTION: [MessageHandler(RELIABLE_TEXT_FILTER, problem_description)],
+            PROBLEM_DESCRIPTION: [MessageHandler(TEXT_MESSAGE_FILTER, problem_description)],
             PROBLEM_NOTES: [
-                MessageHandler(RELIABLE_TEXT_FILTER, problem_notes),
+                MessageHandler(TEXT_MESSAGE_FILTER, problem_notes),
                 CallbackQueryHandler(problem_notes, pattern='^skip_problem_notes$')
             ],
 
-            FEEDBACK_MESSAGE: [MessageHandler(RELIABLE_TEXT_FILTER, feedback_message)],
+            FEEDBACK_MESSAGE: [MessageHandler(TEXT_MESSAGE_FILTER, feedback_message)],
             
             ADMIN_MENU: [
                 CallbackQueryHandler(admin_menu_choice, pattern='^add_volunteer$|^view_volunteers$')
             ],
             
-            ADD_VOLUNTEER_FULL_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_full_name)],
-            ADD_VOLUNTEER_TELEGRAM_ID: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_telegram_id)],
+            ADD_VOLUNTEER_FULL_NAME: [MessageHandler(TEXT_MESSAGE_FILTER, add_volunteer_full_name)],
+            ADD_VOLUNTEER_TELEGRAM_ID: [MessageHandler(TEXT_MESSAGE_FILTER, add_volunteer_telegram_id)],
             ADD_VOLUNTEER_SELECT_TEAM: [CallbackQueryHandler(add_volunteer_select_team, pattern='^' + re.escape('team_select|'))]
         },
         fallbacks=[
