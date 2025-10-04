@@ -1,4 +1,4 @@
-import logging
+Import logging
 import os
 import time
 import sqlite3 
@@ -963,6 +963,10 @@ def main() -> None:
 
     application = Application.builder().token(BOT_TOKEN).build()
     
+    # 🌟 التعديل الحاسم: تعريف فلتر نصوص أكثر موثوقية 🌟
+    # هذا يحل مشكلة "صمت البوت" بعد ضغط زر وتحويل الحالة
+    RELIABLE_TEXT_FILTER = filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND 
+    
     # محادثة الطلبات الرئيسية (وتم دمج مسار إضافة المتطوعين فيها لتجنب أخطاء NameError)
     main_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start), CommandHandler("admin", admin_menu_start, filters=filters.Chat(chat_id=ADMIN_CHAT_ID))],
@@ -972,45 +976,46 @@ def main() -> None:
             ],
             
             # --- مسار الطلبات العادية ---
-            FIRST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, first_name)],
-            LAST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, last_name)],
-            TEAM_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, team_name)],
+            # تم استخدام الفلتر الجديد في جميع حالات الإدخال النصي
+            FIRST_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, first_name)],
+            LAST_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, last_name)],
+            TEAM_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, team_name)],
             
             # مسار الاعتذار
             APOLOGY_TYPE: [CallbackQueryHandler(apology_type, pattern='^meeting$|^initiative$|^other$')],
-            INITIATIVE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, initiative_name)],
-            APOLOGY_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, apology_reason)],
+            INITIATIVE_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, initiative_name)],
+            APOLOGY_REASON: [MessageHandler(RELIABLE_TEXT_FILTER, apology_reason)],
             APOLOGY_NOTES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, apology_notes),
+                MessageHandler(RELIABLE_TEXT_FILTER, apology_notes),
                 CallbackQueryHandler(apology_notes, pattern='^skip_apology_notes$')
             ],
 
             # مسار الإجازة
-            LEAVE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, leave_start_date)],
-            LEAVE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, leave_end_date)],
-            LEAVE_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, leave_reason)],
+            LEAVE_START_DATE: [MessageHandler(RELIABLE_TEXT_FILTER, leave_start_date)],
+            LEAVE_END_DATE: [MessageHandler(RELIABLE_TEXT_FILTER, leave_end_date)],
+            LEAVE_REASON: [MessageHandler(RELIABLE_TEXT_FILTER, leave_reason)],
             LEAVE_NOTES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, leave_notes),
+                MessageHandler(RELIABLE_TEXT_FILTER, leave_notes),
                 CallbackQueryHandler(leave_notes, pattern='^skip_leave_notes$')
             ],
 
             # مسار المشكلة
-            PROBLEM_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, problem_description)],
+            PROBLEM_DESCRIPTION: [MessageHandler(RELIABLE_TEXT_FILTER, problem_description)],
             PROBLEM_NOTES: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, problem_notes),
+                MessageHandler(RELIABLE_TEXT_FILTER, problem_notes),
                 CallbackQueryHandler(problem_notes, pattern='^skip_problem_notes$')
             ],
 
             # مسار الاقتراح/الملاحظة
-            FEEDBACK_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, feedback_message)],
+            FEEDBACK_MESSAGE: [MessageHandler(RELIABLE_TEXT_FILTER, feedback_message)],
             
             # --- مسار المدير ---
             ADMIN_MENU: [
                 CallbackQueryHandler(admin_menu_choice, pattern='^add_volunteer$|^view_volunteers$')
             ],
             # مسار إضافة المتطوعين (مدمج في المحادثة الرئيسية)
-            ADD_VOLUNTEER_FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_volunteer_full_name)],
-            ADD_VOLUNTEER_TELEGRAM_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, add_volunteer_telegram_id)],
+            ADD_VOLUNTEER_FULL_NAME: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_full_name)],
+            ADD_VOLUNTEER_TELEGRAM_ID: [MessageHandler(RELIABLE_TEXT_FILTER, add_volunteer_telegram_id)],
             ADD_VOLUNTEER_SELECT_TEAM: [CallbackQueryHandler(add_volunteer_select_team, pattern='^team_select\|')]
         },
         fallbacks=[
