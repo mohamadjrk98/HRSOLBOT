@@ -1,10 +1,10 @@
-import logging
 import os
 import time
 import sqlite3 
 import random
 import requests
-import json # تم إضافة مكتبة json
+import json
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -16,106 +16,31 @@ from telegram.ext import (
     filters,
 )
 
-# إعدادات التسجيل (Logging)
+# --------------------------------- إعدادات التسجيل (Logging) ---------------------------------
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --------------------------------- إعدادات API الطقس (Synoptic Data) -------------------------------
-# إعداد logging أساسي لتسجيل الأخطاء (ضروري لاستخدام logger.error)
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# --------------------------------- تعريف الحالات والثوابت ---------------------------------
 
-# -----------------------------------------------------------
-# 1. التصحيح الرئيسي: قراءة المفتاح من المتغيرات البيئية
-# -----------------------------------------------------------
-WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY") 
-# تأكد من أنك قمت بتعيين هذا المتغير في إعدادات الاستضافة لديك.
+# الحالات (States) المستخدمة في ConversationHandler
+(MAIN_MENU, FIRST_NAME, LAST_NAME, TEAM_NAME, 
+ APOLOGY_TYPE, INITIATIVE_NAME, APOLOGY_REASON, APOLOGY_NOTES,
+ LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
+ FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES,
+ ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM, ADD_VOLUNTEER_FINALIZE,
+ REFERENCES_MENU) = range(20) 
 
-MASYAF_LAT = 35.06  # خط العرض التقريبي لمصياف
-MASYAF_LON = 36.32  # خط الطول التقريبي لمصياف
-SYNOPTIC_BASE_URL = "https://api.synopticdata.com/v1/stations/latest"
+# متغيرات البيئة (Environment Variables)
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID') # يُستخدم لإرسال الطلبات إليه
+HR_CONTACT_INFO = os.getenv('HR_CONTACT_INFO', 'مسؤول الموارد البشرية') # رقم أو معرف HR
 
-def get_masyaf_weather():
-    """جلب بيانات الطقس الحالية في مصياف باستخدام Synoptic Data API"""
-    
-    # التحقق من صلاحية المفتاح بعد قراءته من البيئة
-    if not WEATHER_API_KEY:
-        return "❌ لا يمكن جلب بيانات الطقس: مفتاح API (WEATHER_API_KEY) غير مضبوط بشكل صحيح في المتغيرات البيئية."
-        
-    try:
-        # البحث عن أقرب محطة طقس حول إحداثيات مصياف (نطاق 50 كم)
-        params = {
-            'attime': 'latest',
-            'radius': f'{MASYAF_LAT},{MASYAF_LON},50', 
-            'token': WEATHER_API_KEY, # استخدام المتغير المقروء
-            'vars': 'air_temp,wind_speed,relative_humidity',
-            'output': 'json',
-            'obtimezone': 'local'
-        }
-        
-        response = requests.get(SYNOPTIC_BASE_URL, params=params, timeout=10)
-        
-        # 1. معالجة أخطاء HTTP الشائعة (مثل 401 للـ API Key)
-        if response.status_code == 401:
-            # رسالة خطأ 401 مفصلة
-            return "❌ خطأ في المفتاح (401): مفتاح API غير صالح أو منتهي الصلاحية. الرجاء التحقق من المفتاح في المتغيرات البيئية."
-        response.raise_for_status() 
-
-        # 2. معالجة أخطاء JSON
-        try:
-            data = response.json()
-        except json.JSONDecodeError:
-            logger.error(f"فشل فك تشفير JSON: {response.text}")
-            return "❌ خطأ في تحليل بيانات الطقس الواردة."
-
-        # 3. معالجة أخطاء Synoptic (STATUS)
-        if data.get('STATUS') != 'OK':
-            error_msg = data.get('MESSAGE', 'غير محدد')
-            logger.error(f"خطأ من خدمة Synoptic: {error_msg}")
-            return f"❌ خطأ من خدمة الطقس: {error_msg}. (تحقق من المفتاح ورصيد الطلبات)."
-            
-        if not data.get('STATION'):
-            return "❌ لا توجد محطات طقس قريبة متاحة حالياً ضمن نطاق البحث (50 كم)."
-            
-        # نأخذ بيانات أول محطة (الأقرب)
-        station_data = data['STATION'][0]
-        # استخدام المتغيرات مباشرة من station_data لتبسيط الكود والتوافق مع الـ 'vars'
-        
-        temp_val = station_data.get('air_temp_set_1', {}).get('value')
-        wind_val = station_data.get('wind_speed_set_1', {}).get('value')
-        humidity_val = station_data.get('relative_humidity_set_1', {}).get('value')
-
-        temp = f"{float(temp_val):.1f}°C" if temp_val is not None else 'غير متوفر'
-        wind = f"{float(wind_val):.1f} عقدة" if wind_val is not None else 'غير متوفر'
-        humidity = f"{float(humidity_val)}%" if humidity_val is not None else 'غير متوفر'
-        
-        obs_time = station_data.get('OBSERVATION_TIME_LOCAL')
-        time_display = f" (آخر رصد: {obs_time.split('T')[1].split('+')[0]})" if obs_time and 'T' in obs_time else ""
-
-        return (
-            f"☀️ **حالة الطقس في منطقة مصياف:**{time_display}\n"
-            f"• المحطة الأقرب: {station_data.get('NAME', 'غير محدد')}\n"
-            f"• درجة الحرارة: {temp}\n"
-            f"• سرعة الرياح: {wind}\n"
-            f"• الرطوبة: {humidity}"
-        )
-        
-    except requests.exceptions.HTTPError as e:
-        logger.error(f"خطأ في الاتصال HTTP: {e.response.status_code} - {e.response.text}")
-        return f"⚠️ حدث خطأ في الاتصال (HTTP {e.response.status_code})."
-    except requests.exceptions.RequestException as e:
-        logger.error(f"خطأ في الاتصال بواجهة Synoptic Data: {e}")
-        return "⚠️ حدث خطأ أثناء الاتصال بخدمة الطقس. (الرجاء التحقق من الاتصال بالشبكة)."
-    except Exception as e:
-        logger.error(f"خطأ غير متوقع في جلب الطقس: {e}", exc_info=True)
-        return "❌ حدث خطأ غير متوقع في جلب البيانات."
-
-# مثال على الاستخدام (للاختبار)
-# if __name__ == '__main__':
-#     print(get_masyaf_weather())
+# متغيرات خاصة بـ Webhook Render
+WEBHOOK_URL = os.getenv('WEBHOOK_URL') 
+PORT = int(os.environ.get('PORT', '5000')) 
 
 # --------------------------------- إعداد قاعدة البيانات ---------------------------------
 
@@ -204,10 +129,37 @@ def is_admin(chat_id):
     return str(chat_id) == str(ADMIN_CHAT_ID)
 
 
+def generate_request_id():
+    """توليد رقم طلب متسلسل يبدأ من 0001"""
+    conn = get_db_connection()
+    try:
+        # زيادة العداد والحصول على القيمة الجديدة
+        cursor = conn.cursor()
+        cursor.execute("UPDATE RequestCounter SET count = count + 1 WHERE id = 1")
+        conn.commit()
+        
+        new_count = conn.execute("SELECT count FROM RequestCounter WHERE id = 1").fetchone()[0]
+        conn.close()
+        # تنسيق الرقم ليكون أربعة خانات (مثال: 0001, 0010)
+        return f"REQ{new_count:04d}"
+    except Exception as e:
+        logger.error(f"خطأ في توليد رقم الطلب: {e}")
+        conn.close()
+        return f"REQ{int(time.time())}" 
+
+def get_request_title(request_type):
+    """جلب عنوان الطلب بناءً على نوعه"""
+    titles = {
+        'apology': 'طلب الاعتذار',
+        'leave': 'طلب الإجازة',
+        'problem': 'بلاغ المشكلة',
+        'feedback': 'الاقتراح/الملاحظة'
+    }
+    return titles.get(request_type, 'طلب')
+
 # --------------------------------- العبارات التحفيزية ---------------------------------
 
 MOTIVATIONAL_QUOTES = [
-    # ... (نفس العبارات التحفيزية السابقة)
     "‏الخير الذي تفعله لا يضيع أبدًا، ستجده في صحيفتك أثراً جميلاً لا يُمحى. ✨",
     "في كل عمل تطوعي، أنت لا تقدم المساعدة للآخرين وحسب، بل تزرع الأمل في قلبك أيضاً. 💚",
     "تذكر دائماً أن أصغر جهد تبذله في مساعدة الآخرين، هو أعظم أثر في ميزان الأجر. 🌟",
@@ -232,52 +184,6 @@ MOTIVATIONAL_QUOTES = [
     "لا تتوقف عن الحلم، والأهم: لا تتوقف عن العمل لتحويل هذه الأحلام إلى واقع ملموس للجميع. 🚀"
 ]
 
-# --------------------------------- تعريف الحالات (States) ---------------------------------
-
-# الحالات (States) المستخدمة في ConversationHandler
-(MAIN_MENU, FIRST_NAME, LAST_NAME, TEAM_NAME, 
- APOLOGY_TYPE, INITIATIVE_NAME, APOLOGY_REASON, APOLOGY_NOTES,
- LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
- FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES,
- ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM, ADD_VOLUNTEER_FINALIZE,
- REFERENCES_MENU) = range(20) 
-
-# متغيرات البيئة (Environment Variables)
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID')
-
-# متغيرات خاصة بـ Webhook Render
-WEBHOOK_URL = os.getenv('WEBHOOK_URL') 
-PORT = int(os.environ.get('PORT', '5000')) 
-
-def generate_request_id():
-    """توليد رقم طلب متسلسل يبدأ من 0001"""
-    conn = get_db_connection()
-    try:
-        # زيادة العداد والحصول على القيمة الجديدة
-        cursor = conn.cursor()
-        cursor.execute("UPDATE RequestCounter SET count = count + 1 WHERE id = 1")
-        conn.commit()
-        
-        new_count = conn.execute("SELECT count FROM RequestCounter WHERE id = 1").fetchone()[0]
-        conn.close()
-        # تنسيق الرقم ليكون أربعة خانات (مثال: 0001, 0010)
-        return f"REQ{new_count:04d}"
-    except Exception as e:
-        logger.error(f"خطأ في توليد رقم الطلب: {e}")
-        conn.close()
-        return f"REQ{int(time.time())}" # العودة للتوقيت كخيار احتياطي
-
-def get_request_title(request_type):
-    """جلب عنوان الطلب بناءً على نوعه"""
-    titles = {
-        'apology': 'طلب الاعتذار',
-        'leave': 'طلب الإجازة',
-        'problem': 'بلاغ المشكلة',
-        'feedback': 'الاقتراح/الملاحظة'
-    }
-    return titles.get(request_type, 'طلب')
-
 # --------------------------------- الدوال الأساسية ---------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -296,8 +202,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
          InlineKeyboardButton("🏖️ طلب إجازة", callback_data='leave')],
         [InlineKeyboardButton("🔧 قسم المشاكل", callback_data='problem'),
          InlineKeyboardButton("💡 اقتراحات وملاحظات", callback_data='feedback')],
-        [InlineKeyboardButton("📚 مراجع الفريق", callback_data='references_menu')],
-        [InlineKeyboardButton("☀️ طقس مصياف", callback_data='masyaf_weather'),
+        [InlineKeyboardButton("📚 مراجع الفريق", callback_data='references_menu'),
          InlineKeyboardButton("🎁 هدية تحفيزية", callback_data='motivational_gift')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -309,12 +214,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         'لإلغاء الطلب في أي وقت، أرسل /cancel'
     )
 
-    # تحرير الرسالة الحالية بدلاً من إرسال رسالة جديدة لتنظيف المحادثة
     if query:
         try:
             await query.edit_message_text(text, reply_markup=reply_markup)
         except Exception:
-             # إذا لم تكن الرسالة قابلة للتحرير، أرسل رسالة جديدة
              await context.bot.send_message(
                 chat_id=message.chat_id, 
                 text=text, 
@@ -327,24 +230,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return MAIN_MENU
 
 # --------------------------------- دوال الأزرار الجديدة ---------------------------------
-
-async def show_masyaf_weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """عرض حالة الطقس في مصياف"""
-    query = update.callback_query
-    await query.answer()
-    
-    weather_report = get_masyaf_weather()
-    
-    # رسالة الطقس
-    weather_message = f"🌤️ تقرير الطقس:\n\n{weather_report}"
-
-    await query.message.reply_text(
-        weather_message, 
-        parse_mode='Markdown'
-    )
-    
-    # العودة إلى القائمة الرئيسية
-    return await start(update, context)
 
 async def references_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """عرض قائمة المراجع"""
@@ -393,6 +278,7 @@ async def send_motivational_gift(update: Update, context: ContextTypes.DEFAULT_T
         parse_mode='Markdown'
     )
     
+    # العودة إلى القائمة الرئيسية (بدون إرسال رسالة تكرار)
     return await start(update, context)
 
 # --------------------------------- دوال القوائم والمسارات ---------------------------------
@@ -404,8 +290,6 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     
     if choice == 'motivational_gift':
         return await send_motivational_gift(update, context)
-    elif choice == 'masyaf_weather':
-        return await show_masyaf_weather(update, context)
     elif choice == 'references_menu':
         return await references_menu(update, context)
         
@@ -413,7 +297,7 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     context.user_data.clear() 
     context.user_data['request_type'] = choice
-    context.user_data['request_id'] = generate_request_id() 
+    context.user_data['request_id'] = generate_request_id() # توليد رقم الطلب هنا
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -421,7 +305,6 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if choice == 'feedback':
         await query.edit_message_text(
             '💡 اقتراحات وملاحظات\n\n'
-            'نسعد بسماع آرائك واقتراحاتك!\n'
             'الرجاء كتابة اقتراحك أو ملاحظتك:',
             reply_markup=reply_markup
         )
@@ -616,7 +499,7 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         f'• السبب: {apology_reason}\n'
         f'• ملاحظات: {apology_notes}\n\n'
         f'**أثرك موجود دائماً.. شكراً لأنك معنا 💚**\n\n'
-        f'سيتم مراجعة طلبك قريباً.'
+        f'سيتم مراجعة طلبك قريباً. **إذا تأخر الرد لأكثر من ساعة، يرجى مراسلة {HR_CONTACT_INFO} للمتابعة الفورية.**'
     )
 
     admin_message = (
@@ -1114,7 +997,7 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         else:
             user_notification = (
                 f'❌ نعتذر! تم **رفض** {request_title} الخاص بك برقم `{request_id}`.\n'
-                f'للاستعلام عن السبب، يرجى **مراسلة الموارد البشرية (HR)**.'
+                f'للاستعلام عن السبب، يرجى **مراسلة {HR_CONTACT_INFO}**.'
             )
 
         await context.bot.send_message(
@@ -1145,7 +1028,7 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"خطأ في تحديث رسالة المشرف: {e}")
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """العودة للقائمة الرئيسية (تم التعديل للتحرير)"""
+    """العودة للقائمة الرئيسية"""
     query = update.callback_query
     if query:
         await query.answer()
@@ -1205,7 +1088,7 @@ def initialize_application() -> None:
         ],
         states={
             MAIN_MENU: [
-                CallbackQueryHandler(main_menu_choice, pattern='^(apology|leave|feedback|problem|motivational_gift|masyaf_weather|references_menu)$') 
+                CallbackQueryHandler(main_menu_choice, pattern='^(apology|leave|feedback|problem|motivational_gift|references_menu)$') 
             ],
             
             # حالات الطلبات الأساسية
