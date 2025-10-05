@@ -184,18 +184,53 @@ MOTIVATIONAL_QUOTES = [
     "لا تتوقف عن الحلم، والأهم: لا تتوقف عن العمل لتحويل هذه الأحلام إلى واقع ملموس للجميع. 🚀"
 ]
 
+# --------------------------------- دوال المساعدة للرسائل ---------------------------------
+
+async def delete_previous_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """يحاول حذف رسالة البوت الأخيرة المخزنة في context.user_data."""
+    message_id = context.user_data.pop('last_bot_message_id', None)
+    if message_id:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception as e:
+            logger.debug(f"فشل في حذف الرسالة {message_id}: {e}")
+
+async def send_and_track_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = None):
+    """يرسل رسالة جديدة ويخزن رقمها لتنظيف المحادثة لاحقاً."""
+    message = await update.effective_chat.send_message(
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode
+    )
+    context.user_data['last_bot_message_id'] = message.message_id
+    return message
+
+
 # --------------------------------- الدوال الأساسية ---------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """البداية - عرض القائمة الرئيسية (تم التعديل لتحرير الرسالة)"""
     query = update.callback_query
+    
     if query:
         await query.answer()
         user = query.from_user
         message = query.message
+        # لا نحذف هنا لأننا سنقوم بتحرير الرسالة
     else:
         user = update.effective_user
         message = update.message
+        # محاولة حذف رسالة الأمر /start إذا لم تكن أول رسالة
+        if message.text and message.text.startswith('/start') and message.message_id != message.chat.last_message.message_id:
+             try:
+                 await context.bot.delete_message(chat_id=message.chat_id, message_id=message.message_id)
+             except Exception:
+                 pass # لا يهم إذا فشل الحذف
+
+    # تنظيف بيانات المستخدم ما عدا بيانات المشرف
+    for key in list(context.user_data.keys()):
+        if key not in ['admin_mode']:
+            del context.user_data[key]
 
     keyboard = [
         [InlineKeyboardButton("📝 طلب اعتذار", callback_data='apology'),
@@ -214,10 +249,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         'لإلغاء الطلب في أي وقت، أرسل /cancel'
     )
 
-    if query:
+    if query and query.message.text:
         try:
-            await query.edit_message_text(text, reply_markup=reply_markup)
+            message = await query.edit_message_text(text, reply_markup=reply_markup)
+            context.user_data['last_bot_message_id'] = message.message_id
         except Exception:
+             # إذا فشل التحرير (مثل محاولة تحرير رسالة قديمة جداً)، نرسل رسالة جديدة
              await context.bot.send_message(
                 chat_id=message.chat_id, 
                 text=text, 
@@ -225,7 +262,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 reply_to_message_id=None
             )
     else:
-        await message.reply_text(text, reply_markup=reply_markup, reply_to_message_id=None)
+        message = await update.message.reply_text(text, reply_markup=reply_markup, reply_to_message_id=None)
+        context.user_data['last_bot_message_id'] = message.message_id
+
 
     return MAIN_MENU
 
@@ -295,6 +334,7 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         
     await query.answer()
 
+    # تنظيف البيانات قبل بدء طلب جديد
     context.user_data.clear() 
     context.user_data['request_type'] = choice
     context.user_data['request_id'] = generate_request_id() # توليد رقم الطلب هنا
@@ -303,35 +343,42 @@ async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if choice == 'feedback':
-        await query.edit_message_text(
+        message = await query.edit_message_text(
             '💡 اقتراحات وملاحظات\n\n'
             'الرجاء كتابة اقتراحك أو ملاحظتك:',
             reply_markup=reply_markup
         )
+        context.user_data['last_bot_message_id'] = message.message_id
         return FEEDBACK_MESSAGE
 
     elif choice == 'problem':
-        await query.edit_message_text(
+        message = await query.edit_message_text(
             '🔧 قسم حل المشاكل\n\n'
             'الرجاء وصف المشكلة التي تواجهها بوضوح:',
             reply_markup=reply_markup
         )
+        context.user_data['last_bot_message_id'] = message.message_id
         return PROBLEM_DESCRIPTION
 
-    await query.edit_message_text(
+    # طلبات تحتاج اسم (apology, leave)
+    message = await query.edit_message_text(
         'الرجاء إدخال اسمك الأول:',
         reply_markup=reply_markup
     )
+    context.user_data['last_bot_message_id'] = message.message_id
     return FIRST_NAME
 
 async def first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الاسم الأول وطلب الكنية"""
+    """حفظ الاسم الأول وطلب الكنية مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['first_name'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update, 
+        context,
         f'أهلاً {update.message.text}!\n\n'
         'الرجاء إدخال الكنية (اسم العائلة):',
         reply_markup=reply_markup
@@ -340,13 +387,16 @@ async def first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الكنية وطلب اسم الفريق"""
+    """حفظ الكنية وطلب اسم الفريق مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['last_name'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update, 
+        context,
         'ما هو الفريق الذي تنتمي إليه؟\n'
         '(مثال: فريق الدعم الأول، الدعم الثاني، الخ)',
         reply_markup=reply_markup
@@ -355,7 +405,8 @@ async def last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ اسم الفريق والانتقال حسب نوع الطلب"""
+    """حفظ اسم الفريق والانتقال حسب نوع الطلب مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['team_name'] = update.message.text
     request_type = context.user_data.get('request_type')
 
@@ -368,7 +419,9 @@ async def team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text(
+        await send_and_track_message(
+            update, 
+            context,
             '📝 طلب اعتذار\n\n'
             'ما هو نوع الفعالية/الاعتذار؟',
             reply_markup=reply_markup
@@ -379,7 +432,9 @@ async def team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
-        await update.message.reply_text(
+        await send_and_track_message(
+            update, 
+            context,
             '🏖️ طلب إجازة\n\n'
             '📌 **ملاحظة هامة:** مدة الإجازة المسموحة للمتطوع خلال السنة هي **شهر واحد فقط** للامتحانات و**الظروف القاهرة**.\n\n'
             'الرجاء إدخال **تاريخ بدء الإجازة**:\n'
@@ -411,28 +466,33 @@ async def apology_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if type_choice == 'initiative':
-        await query.edit_message_text(
+        message = await query.edit_message_text(
             'الرجاء إدخال **اسم المبادرة** التي تعتذر عنها:',
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+        context.user_data['last_bot_message_id'] = message.message_id
         return INITIATIVE_NAME
     else:
-        await query.edit_message_text(
+        message = await query.edit_message_text(
             f'تم اختيار: {context.user_data["apology_type"]}\n\n'
             'الرجاء كتابة سبب الاعتذار بالتفصيل:',
             reply_markup=reply_markup
         )
+        context.user_data['last_bot_message_id'] = message.message_id
         return APOLOGY_REASON
 
 async def initiative_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ اسم المبادرة وطلب سبب الاعتذار"""
+    """حفظ اسم المبادرة وطلب سبب الاعتذار مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['initiative_name'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update,
+        context,
         f'المبادرة: {update.message.text}\n\n'
         'الرجاء كتابة سبب الاعتذار بالتفصيل:',
         reply_markup=reply_markup
@@ -441,7 +501,8 @@ async def initiative_name(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def apology_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ سبب الاعتذار وطلب الملاحظات"""
+    """حفظ سبب الاعتذار وطلب الملاحظات مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['apology_reason'] = update.message.text
 
     keyboard = [
@@ -450,7 +511,9 @@ async def apology_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update,
+        context,
         'هل لديك أي ملاحظات إضافية بخصوص الاعتذار؟\n'
         '(اكتب ملاحظاتك أو اضغط تخطي)',
         reply_markup=reply_markup
@@ -460,6 +523,7 @@ async def apology_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """حفظ الملاحظات وإرسال الطلب للمدير"""
+    # لا حاجة لحذف الرسائل هنا، سنقوم بالتحرير أو إرسال رسالة جديدة
     message = update.message
     if update.callback_query:
         query = update.callback_query
@@ -467,6 +531,7 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         context.user_data['apology_notes'] = 'لا توجد'
         message = query.message
     else:
+        await delete_previous_message(context, update.effective_chat.id)
         context.user_data['apology_notes'] = update.message.text
 
 
@@ -479,7 +544,7 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     team_name = context.user_data.get('team_name', 'غير محدد')
     apology_type = context.user_data.get('apology_type', 'غير محدد')
     apology_reason = context.user_data.get('apology_reason', 'غير محدد')
-    apology_notes = context.user_data.get('apology_notes', 'لا توجد')
+    apology_notes_val = context.user_data.get('apology_notes', 'لا توجد')
 
     initiative_name_val = context.user_data.get('initiative_name')
     if initiative_name_val:
@@ -497,7 +562,7 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         f'• الفريق: {team_name}\n'
         f'{details_line}'
         f'• السبب: {apology_reason}\n'
-        f'• ملاحظات: {apology_notes}\n\n'
+        f'• ملاحظات: {apology_notes_val}\n\n'
         f'**أثرك موجود دائماً.. شكراً لأنك معنا 💚**\n\n'
         f'سيتم مراجعة طلبك قريباً. **إذا تأخر الرد لأكثر من ساعة، يرجى مراسلة {HR_CONTACT_INFO} للمتابعة الفورية.**'
     )
@@ -513,7 +578,7 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         f'📋 **التفاصيل:**\n'
         f'{admin_type_line}'
         f'• سبب الاعتذار: {apology_reason}\n'
-        f'• ملاحظات: {apology_notes}\n'
+        f'• ملاحظات: {apology_notes_val}\n'
         f'━━━━━━━━━━━━━━━━━'
     )
 
@@ -552,13 +617,16 @@ async def apology_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 # --------------------------------- دوال مسار الإجازة (LEAVE) ---------------------------------
 
 async def leave_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ تاريخ بدء الإجازة وطلب تاريخ الانتهاء"""
+    """حفظ تاريخ بدء الإجازة وطلب تاريخ الانتهاء مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['leave_start_date'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update, 
+        context,
         f'تاريخ البدء: {update.message.text}\n\n'
         'الرجاء إدخال **تاريخ انتهاء الإجازة**:',
         reply_markup=reply_markup,
@@ -567,13 +635,16 @@ async def leave_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return LEAVE_END_DATE
 
 async def leave_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ تاريخ انتهاء الإجازة وطلب السبب"""
+    """حفظ تاريخ انتهاء الإجازة وطلب السبب مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['leave_end_date'] = update.message.text
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update, 
+        context,
         f'تاريخ الانتهاء: {update.message.text}\n\n'
         'الرجاء كتابة سبب طلب الإجازة بوضوح:',
         reply_markup=reply_markup
@@ -582,7 +653,8 @@ async def leave_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def leave_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ سبب الإجازة وطلب الملاحظات"""
+    """حفظ سبب الإجازة وطلب الملاحظات مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['leave_reason'] = update.message.text
 
     keyboard = [
@@ -591,7 +663,9 @@ async def leave_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update,
+        context,
         'هل لديك أي ملاحظات إضافية بخصوص الإجازة؟\n'
         '(اكتب ملاحظاتك أو اضغط تخطي)',
         reply_markup=reply_markup
@@ -608,6 +682,7 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         context.user_data['leave_notes'] = 'لا توجد'
         message = query.message
     else:
+        await delete_previous_message(context, update.effective_chat.id)
         context.user_data['leave_notes'] = update.message.text
 
     user = update.effective_user
@@ -617,10 +692,10 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     first_name = context.user_data.get('first_name', 'غير محدد')
     last_name = context.user_data.get('last_name', 'غير محدد')
     team_name = context.user_data.get('team_name', 'غير محدد')
-    leave_start_date = context.user_data.get('leave_start_date', 'غير محدد')
-    leave_end_date = context.user_data.get('leave_end_date', 'غير محدد')
-    leave_reason = context.user_data.get('leave_reason', 'غير محدد')
-    leave_notes = context.user_data.get('leave_notes', 'لا توجد')
+    leave_start_date_val = context.user_data.get('leave_start_date', 'غير محدد')
+    leave_end_date_val = context.user_data.get('leave_end_date', 'غير محدد')
+    leave_reason_val = context.user_data.get('leave_reason', 'غير محدد')
+    leave_notes_val = context.user_data.get('leave_notes', 'لا توجد')
 
     volunteer_message = (
         f'✅ **تم استلام طلب الإجازة!**\n\n'
@@ -628,10 +703,10 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         f'📋 **ملخص الطلب:**\n'
         f'• الاسم: {first_name} {last_name}\n'
         f'• الفريق: {team_name}\n'
-        f'• تاريخ البدء: {leave_start_date}\n'
-        f'• تاريخ الانتهاء: {leave_end_date}\n'
-        f'• السبب: {leave_reason}\n'
-        f'• ملاحظات: {leave_notes}\n\n'
+        f'• تاريخ البدء: {leave_start_date_val}\n'
+        f'• تاريخ الانتهاء: {leave_end_date_val}\n'
+        f'• السبب: {leave_reason_val}\n'
+        f'• ملاحظات: {leave_notes_val}\n\n'
         f'**أثرك موجود دائماً.. شكراً لأنك معنا 💚**\n\n'
         f'سيتم مراجعة طلبك قريباً.'
     )
@@ -645,10 +720,10 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         f'🆔 المعرف: @{user.username or "لا يوجد"}\n'
         f'🆔 رقم المستخدم: {user_id}\n\n'
         f'📋 **التفاصيل:**\n'
-        f'• تاريخ بدء الإجازة: {leave_start_date}\n'
-        f'• تاريخ انتهاء الإجازة: {leave_end_date}\n'
-        f'• سبب الإجازة: {leave_reason}\n'
-        f'• ملاحظات: {leave_notes}\n'
+        f'• تاريخ بدء الإجازة: {leave_start_date_val}\n'
+        f'• تاريخ انتهاء الإجازة: {leave_end_date_val}\n'
+        f'• سبب الإجازة: {leave_reason_val}\n'
+        f'• ملاحظات: {leave_notes_val}\n'
         f'━━━━━━━━━━━━━━━━━'
     )
 
@@ -686,7 +761,8 @@ async def leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 # --------------------------------- دوال مسار المشاكل والاقتراحات ---------------------------------
 
 async def problem_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ وصف المشكلة وطلب الملاحظات"""
+    """حفظ وصف المشكلة وطلب الملاحظات مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['problem_description'] = update.message.text
 
     keyboard = [
@@ -695,7 +771,9 @@ async def problem_description(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update,
+        context,
         'هل لديك أي ملاحظات إضافية أو معلومات تساعد في حل المشكلة؟\n'
         '(اكتب ملاحظاتك أو اضغط تخطي)',
         reply_markup=reply_markup
@@ -712,6 +790,7 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         context.user_data['problem_notes'] = 'لا توجد'
         message = query.message
     else:
+        await delete_previous_message(context, update.effective_chat.id)
         context.user_data['problem_notes'] = update.message.text
 
     user = update.effective_user
@@ -719,14 +798,14 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     user_id = user.id
     request_type = context.user_data.get('request_type', 'problem')
     problem_description = context.user_data.get('problem_description', 'غير محدد')
-    problem_notes = context.user_data.get('problem_notes', 'لا توجد')
+    problem_notes_val = context.user_data.get('problem_notes', 'لا توجد')
 
     volunteer_message = (
         f'✅ **تم استلام بلاغ المشكلة!**\n\n'
         f'🔖 رقم البلاغ: `{request_id}`\n\n'
         f'📋 **ملخص البلاغ:**\n'
         f'• المشكلة: {problem_description}\n'
-        f'• ملاحظات: {problem_notes}\n\n'
+        f'• ملاحظات: {problem_notes_val}\n\n'
         f'**أثرك موجود دائماً.. شكراً لأنك معنا 💚**\n\n'
         f'سيتم العمل على حل المشكلة قريباً.'
     )
@@ -740,7 +819,7 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         f'🆔 رقم المستخدم: {user_id}\n\n'
         f'📋 **التفاصيل:**\n'
         f'• وصف المشكلة: {problem_description}\n'
-        f'• ملاحظات: {problem_notes}\n'
+        f'• ملاحظات: {problem_notes_val}\n'
         f'━━━━━━━━━━━━━━━━━'
     )
 
@@ -778,6 +857,8 @@ async def problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def feedback_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """استلام الاقتراح وإرساله للمدير"""
+    await delete_previous_message(context, update.effective_chat.id)
+    
     feedback = update.message.text
     user = update.effective_user
     request_id = context.user_data.get('request_id', 'N/A')
@@ -839,6 +920,13 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     if not is_admin(chat_id):
         await update.message.reply_text("❌ غير مصرح لك باستخدام هذا الأمر.")
         return ConversationHandler.END
+    
+    # محاولة حذف رسالة الأمر /admin
+    if update.message:
+        try:
+             await context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
+        except Exception:
+            pass # لا يهم إذا فشل الحذف
 
     keyboard = [
         [InlineKeyboardButton("➕ إضافة متطوع جديد", callback_data='admin_add_volunteer')],
@@ -846,7 +934,10 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    # استخدام send_and_track_message لضمان تخزين ID الرسالة للمرة الأولى
+    await send_and_track_message(
+        update, 
+        context,
         '👋 مرحباً بك يا مشرف!\n\n'
         'لوحة تحكم المتطوعين:',
         reply_markup=reply_markup
@@ -861,16 +952,18 @@ async def admin_add_volunteer_prompt(update: Update, context: ContextTypes.DEFAU
     keyboard = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await query.edit_message_text(
+    message = await query.edit_message_text(
         '➕ إضافة متطوع جديد\n\n'
         'الرجاء إدخال **الاسم الكامل للمتطوع** (كما سيظهر في القوائم):',
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+    context.user_data['last_bot_message_id'] = message.message_id
     return ADD_VOLUNTEER_FULL_NAME
 
 async def admin_get_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """حفظ الاسم الكامل والمطالبة باختيار الفريق"""
+    """حفظ الاسم الكامل والمطالبة باختيار الفريق مع تنظيف الرسائل"""
+    await delete_previous_message(context, update.effective_chat.id)
     context.user_data['new_volunteer_full_name'] = update.message.text
     
     teams = get_all_teams()
@@ -887,7 +980,9 @@ async def admin_get_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE
     keyboard.append([InlineKeyboardButton("🔙 العودة للقائمة الرئيسية", callback_data='back_to_menu')])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(
+    await send_and_track_message(
+        update, 
+        context,
         f"تم تسجيل الاسم: {update.message.text}\n\n"
         "الرجاء اختيار **الفريق** الذي سينضم إليه المتطوع:",
         reply_markup=reply_markup,
@@ -915,7 +1010,7 @@ async def admin_select_team(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     keyboard = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
+    message = await query.edit_message_text(
         f"✅ تم اختيار الفريق: **{team_name}**\n\n"
         "الخطوة الأخيرة: الرجاء إرسال **رقم معرف تيليجرام (Telegram ID)** الخاص بالمتطوع.\n"
         "*(يمكن الحصول عليه عبر بوتات مثل @userinfobot)*\n\n"
@@ -923,23 +1018,26 @@ async def admin_select_team(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+    context.user_data['last_bot_message_id'] = message.message_id
     return ADD_VOLUNTEER_FINALIZE
 
 async def admin_finalize_volunteer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """استلام رقم تيليجرام وحفظ المتطوع في القاعدة"""
+    await delete_previous_message(context, update.effective_chat.id)
     telegram_id_str = update.message.text
     
-    keyboard = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     # التحقق من أن الإدخال هو رقم
     if not telegram_id_str.isdigit():
+        keyboard = [[InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
             '❌ **إدخال غير صالح!**\n'
             'الرجاء إدخال رقم معرف تيليجرام **فقط** (مثال: 123456789).',
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+        # العودة لنفس الخطوة
         return ADD_VOLUNTEER_FINALIZE
         
     telegram_id = int(telegram_id_str)
@@ -1028,12 +1126,15 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"خطأ في تحديث رسالة المشرف: {e}")
 
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """العودة للقائمة الرئيسية"""
+    """العودة للقائمة الرئيسية - يتم استدعاؤها عبر CallbackQueryHandler"""
     query = update.callback_query
     if query:
         await query.answer()
-
+        
+    # هنا يتم تنظيف الرسالة التي تم الضغط على الزر فيها
     context.user_data.clear()
+    
+    # نحافظ على استخدام start، وهي تقوم بـ edit_message_text أو send_message
     return await start(update, context) 
 
 async def new_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1072,13 +1173,14 @@ def initialize_application() -> None:
     application = Application.builder().token(BOT_TOKEN).build()
 
     # 2. إضافة الـ Handlers
+    # يجب تعريف معالج العودة للقائمة الرئيسية أولاً لضمان وجوده في نطاق الكونفرزيشن
     back_to_menu_handler = CallbackQueryHandler(back_to_menu, pattern='^back_to_menu$')
     text_message_filter = filters.TEXT & ~filters.COMMAND
     
     admin_action_handler = CallbackQueryHandler(handle_admin_action, pattern=r'^action\|(approve|reject)\|.+$')
     
-    admin_command_handler = CommandHandler('admin', admin_start)
-    application.add_handler(admin_command_handler)
+    # حذف معالج admin_command_handler الخارجي لضمان عدم تداخل تدفق المحادثة
+    # application.add_handler(CommandHandler('admin', admin_start))
 
     conv_handler = ConversationHandler(
         entry_points=[
@@ -1091,7 +1193,7 @@ def initialize_application() -> None:
                 CallbackQueryHandler(main_menu_choice, pattern='^(apology|leave|feedback|problem|motivational_gift|references_menu)$') 
             ],
             
-            # حالات الطلبات الأساسية
+            # حالات الطلبات الأساسية (back_to_menu_handler مُدرج أولاً)
             FIRST_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, first_name)],
             LAST_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, last_name)],
             TEAM_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, team_name)],
@@ -1132,8 +1234,9 @@ def initialize_application() -> None:
             
             # حالات المشرف
             ADMIN_MENU: [
+                # تم التأكد من أن هذا المعالج يلتقط الزر ويعمل
                 CallbackQueryHandler(admin_add_volunteer_prompt, pattern='^admin_add_volunteer$'),
-                back_to_menu_handler, 
+                back_to_menu_handler, # العودة للقائمة الرئيسية
             ],
             ADD_VOLUNTEER_FULL_NAME: [back_to_menu_handler, MessageHandler(text_message_filter, admin_get_full_name)],
             ADD_VOLUNTEER_SELECT_TEAM: [
@@ -1189,3 +1292,4 @@ if __name__ == '__main__':
             application.run_polling(allowed_updates=Update.ALL_TYPES)
     else:
         logger.info("تم التهيئة، ومن المتوقع أن يتم التشغيل عبر Gunicorn.")
+
