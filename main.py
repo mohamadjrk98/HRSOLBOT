@@ -221,7 +221,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         user = update.effective_user
         message = update.message
         # محاولة حذف رسالة الأمر /start إذا لم تكن أول رسالة
-        if message.text and message.text.startswith('/start') and message.message_id != message.chat.last_message.message_id:
+        if message.text and message.text.startswith('/start'):
              try:
                  await context.bot.delete_message(chat_id=message.chat_id, message_id=message.message_id)
              except Exception:
