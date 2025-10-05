@@ -203,7 +203,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         [InlineKeyboardButton("🔧 قسم المشاكل", callback_data='problem'),
          InlineKeyboardButton("💡 اقتراحات وملاحظات", callback_data='feedback')],
         [InlineKeyboardButton("📚 مراجع الفريق", callback_data='references_menu'),
-         InlineKeyboardButton("🎁 هدية تحفيزية", callback_data='motivational_gift')]
+         InlineKeyboardButton("🎁 هدية لطيفة", callback_data='motivational_gift')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
