@@ -4,6 +4,7 @@ import time
 import sqlite3 
 import random
 import requests
+import json # تم إضافة مكتبة json
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -31,14 +32,15 @@ SYNOPTIC_BASE_URL = "https://api.synopticdata.com/v1/stations/latest"
 
 def get_masyaf_weather():
     """جلب بيانات الطقس الحالية في مصياف باستخدام Synoptic Data API"""
-    if not WEATHER_API_KEY:
-        return "❌ لا يمكن جلب بيانات الطقس: مفتاح API غير مضبوط."
+    # التحقق من صلاحية المفتاح
+    if not WEATHER_API_KEY or WEATHER_API_KEY == "YOUR_OPENWEATHERMAP_API_KEY":
+        return "❌ لا يمكن جلب بيانات الطقس: مفتاح API غير مضبوط بشكل صحيح."
         
     try:
-        # البحث عن أقرب محطة طقس حول إحداثيات مصياف
+        # البحث عن أقرب محطة طقس حول إحداثيات مصياف (نطاق 50 كم)
         params = {
             'attime': 'latest',
-            'radius': f'{MASYAF_LAT},{MASYAF_LON},50', # بحث في نطاق 50 كم
+            'radius': f'{MASYAF_LAT},{MASYAF_LON},50', 
             'token': WEATHER_API_KEY,
             'vars': 'air_temp,wind_speed,wind_direction,relative_humidity',
             'output': 'json',
@@ -46,25 +48,44 @@ def get_masyaf_weather():
         }
         
         response = requests.get(SYNOPTIC_BASE_URL, params=params, timeout=10)
-        response.raise_for_status() 
-        data = response.json()
         
-        if data.get('STATUS') != 'OK' or not data.get('STATION'):
-            return "❌ لا توجد محطات طقس قريبة متاحة حالياً."
+        # 1. معالجة أخطاء HTTP الشائعة (مثل 401 للـ API Key)
+        if response.status_code == 401:
+            return "❌ خطأ في المفتاح (401): مفتاح API غير صالح أو منتهي الصلاحية. الرجاء التحقق من المفتاح."
+        response.raise_for_status() 
+
+        # 2. معالجة أخطاء JSON
+        try:
+            data = response.json()
+        except json.JSONDecodeError:
+            logger.error(f"فشل فك تشفير JSON: {response.text}")
+            return "❌ خطأ في تحليل بيانات الطقس الواردة."
+
+        # 3. معالجة أخطاء Synoptic (STATUS)
+        if data.get('STATUS') != 'OK':
+            error_msg = data.get('MESSAGE', 'غير محدد')
+            return f"❌ خطأ من خدمة الطقس: {error_msg}. (تحقق من المفتاح ورصيد الطلبات)."
+            
+        if not data.get('STATION'):
+            return "❌ لا توجد محطات طقس قريبة متاحة حالياً ضمن نطاق البحث."
             
         # نأخذ بيانات أول محطة (الأقرب)
         station_data = data['STATION'][0]
-        readings = station_data['SENSOR_OBSERVATIONS'][0]['observation']
+        readings = station_data.get('SENSOR_OBSERVATIONS', [{}])[0].get('observation', [])
         
-        temp_obj = next((obs for obs in readings if obs['air_temp_set_1'] is not None), None)
-        wind_obj = next((obs for obs in readings if obs['wind_speed_set_1'] is not None), None)
-        humid_obj = next((obs for obs in readings if obs['relative_humidity_set_1'] is not None), None)
+        # استخراج المتغيرات بأمان
+        temp = 'غير متوفر'
+        wind = 'غير متوفر'
+        humidity = 'غير متوفر'
 
-        temp = f"{float(temp_obj['air_temp_set_1']):.1f}°C" if temp_obj else 'غير متوفر'
-        wind = f"{float(wind_obj['wind_speed_set_1']):.1f} عقدة" if wind_obj else 'غير متوفر'
-        humidity = f"{float(humid_obj['relative_humidity_set_1'])}%" if humid_obj else 'غير متوفر'
+        for obs in readings:
+            if 'air_temp_set_1' in obs and obs['air_temp_set_1'] is not None:
+                temp = f"{float(obs['air_temp_set_1']):.1f}°C"
+            if 'wind_speed_set_1' in obs and obs['wind_speed_set_1'] is not None:
+                wind = f"{float(obs['wind_speed_set_1']):.1f} عقدة"
+            if 'relative_humidity_set_1' in obs and obs['relative_humidity_set_1'] is not None:
+                humidity = f"{float(obs['relative_humidity_set_1'])}%"
         
-        # للحصول على وقت الرصد
         obs_time = station_data.get('OBSERVATION_TIME_LOCAL')
         time_display = f" (آخر رصد: {obs_time.split('T')[1].split('+')[0]})" if obs_time else ""
 
@@ -75,9 +96,12 @@ def get_masyaf_weather():
             f"• سرعة الرياح: {wind}\n"
             f"• الرطوبة: {humidity}"
         )
+    except requests.exceptions.HTTPError as e:
+        logger.error(f"خطأ في الاتصال HTTP: {e.response.status_code} - {e.response.text}")
+        return f"⚠️ حدث خطأ في الاتصال (HTTP {e.response.status_code})."
     except requests.exceptions.RequestException as e:
         logger.error(f"خطأ في الاتصال بواجهة Synoptic Data: {e}")
-        return "⚠️ حدث خطأ أثناء الاتصال بخدمة الطقس. (الرجاء التحقق من مفتاح API)"
+        return "⚠️ حدث خطأ أثناء الاتصال بخدمة الطقس. (الرجاء التحقق من المفتاح أو الاتصال بالشبكة)."
     except Exception as e:
         logger.error(f"خطأ غير متوقع في جلب الطقس: {e}")
         return "❌ حدث خطأ غير متوقع في جلب البيانات."
