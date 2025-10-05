@@ -23,12 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# --------------------------------- إعدادات API الطقس (Synoptic Data) ---------------------------------
- import os
-import requests
-import json
-import logging
-
+# --------------------------------- إعدادات API الطقس (Synoptic Data) -------------------------------
 # إعداد logging أساسي لتسجيل الأخطاء (ضروري لاستخدام logger.error)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
