@@ -3,6 +3,7 @@ import os
 import time
 import sqlite3 
 import random
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -21,6 +22,66 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --------------------------------- إعدادات API الطقس (Synoptic Data) ---------------------------------
+# **مفتاح API المقدم من المستخدم**
+WEATHER_API_KEY = "KubmPkihoxS6eNUYVEnJ4wiVDWTQcrZ3EkjQ0VtDtq" 
+MASYAF_LAT = 35.06  # خط العرض التقريبي لمصياف
+MASYAF_LON = 36.32  # خط الطول التقريبي لمصياف
+SYNOPTIC_BASE_URL = "https://api.synopticdata.com/v1/stations/latest"
+
+def get_masyaf_weather():
+    """جلب بيانات الطقس الحالية في مصياف باستخدام Synoptic Data API"""
+    if not WEATHER_API_KEY:
+        return "❌ لا يمكن جلب بيانات الطقس: مفتاح API غير مضبوط."
+        
+    try:
+        # البحث عن أقرب محطة طقس حول إحداثيات مصياف
+        params = {
+            'attime': 'latest',
+            'radius': f'{MASYAF_LAT},{MASYAF_LON},50', # بحث في نطاق 50 كم
+            'token': WEATHER_API_KEY,
+            'vars': 'air_temp,wind_speed,wind_direction,relative_humidity',
+            'output': 'json',
+            'obtimezone': 'local'
+        }
+        
+        response = requests.get(SYNOPTIC_BASE_URL, params=params, timeout=10)
+        response.raise_for_status() 
+        data = response.json()
+        
+        if data.get('STATUS') != 'OK' or not data.get('STATION'):
+            return "❌ لا توجد محطات طقس قريبة متاحة حالياً."
+            
+        # نأخذ بيانات أول محطة (الأقرب)
+        station_data = data['STATION'][0]
+        readings = station_data['SENSOR_OBSERVATIONS'][0]['observation']
+        
+        temp_obj = next((obs for obs in readings if obs['air_temp_set_1'] is not None), None)
+        wind_obj = next((obs for obs in readings if obs['wind_speed_set_1'] is not None), None)
+        humid_obj = next((obs for obs in readings if obs['relative_humidity_set_1'] is not None), None)
+
+        temp = f"{float(temp_obj['air_temp_set_1']):.1f}°C" if temp_obj else 'غير متوفر'
+        wind = f"{float(wind_obj['wind_speed_set_1']):.1f} عقدة" if wind_obj else 'غير متوفر'
+        humidity = f"{float(humid_obj['relative_humidity_set_1'])}%" if humid_obj else 'غير متوفر'
+        
+        # للحصول على وقت الرصد
+        obs_time = station_data.get('OBSERVATION_TIME_LOCAL')
+        time_display = f" (آخر رصد: {obs_time.split('T')[1].split('+')[0]})" if obs_time else ""
+
+        return (
+            f"☀️ **حالة الطقس في منطقة مصياف:**{time_display}\n"
+            f"• المحطة الأقرب: {station_data.get('NAME', 'غير محدد')}\n"
+            f"• درجة الحرارة: {temp}\n"
+            f"• سرعة الرياح: {wind}\n"
+            f"• الرطوبة: {humidity}"
+        )
+    except requests.exceptions.RequestException as e:
+        logger.error(f"خطأ في الاتصال بواجهة Synoptic Data: {e}")
+        return "⚠️ حدث خطأ أثناء الاتصال بخدمة الطقس. (الرجاء التحقق من مفتاح API)"
+    except Exception as e:
+        logger.error(f"خطأ غير متوقع في جلب الطقس: {e}")
+        return "❌ حدث خطأ غير متوقع في جلب البيانات."
+
 # --------------------------------- إعداد قاعدة البيانات ---------------------------------
 
 DB_NAME = 'volunteers_system.db'
@@ -28,11 +89,11 @@ DB_NAME = 'volunteers_system.db'
 def get_db_connection():
     """إنشاء اتصال بقاعدة بيانات SQLite"""
     conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row  # الوصول إلى الأعمدة بالاسم
+    conn.row_factory = sqlite3.Row
     return conn
 
 def setup_database():
-    """إنشاء جدولي الفرق والمتطوعين وتعبئة بعض الفرق المبدئية"""
+    """إنشاء الجداول اللازمة وتعبئة البيانات الأولية"""
     conn = get_db_connection()
     cursor = conn.cursor()
 
@@ -55,6 +116,18 @@ def setup_database():
             FOREIGN KEY (team_id) REFERENCES Teams(id)
         )
     ''')
+    
+    # 3. Request Counter Table (لمتابعة الترقيم المتسلسل)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS RequestCounter (
+            id INTEGER PRIMARY KEY,
+            count INTEGER NOT NULL
+        )
+    ''')
+    # تهيئة العداد إذا كان الجدول فارغًا
+    if cursor.execute("SELECT COUNT(*) FROM RequestCounter").fetchone()[0] == 0:
+        cursor.execute("INSERT INTO RequestCounter (id, count) VALUES (1, 0)")
+
 
     # إضافة فرق مبدئية إذا لم تكن موجودة
     initial_teams = [('فريق الدعم الأول',), ('فريق الدعم الثاني',), ('فريق المتابعة',)]
@@ -62,7 +135,7 @@ def setup_database():
         try:
             cursor.execute("INSERT INTO Teams (name) VALUES (?)", team)
         except sqlite3.IntegrityError:
-            pass # تم إضافته مسبقًا
+            pass 
 
     conn.commit()
     conn.close()
@@ -87,19 +160,19 @@ def add_new_volunteer_to_db(telegram_id, full_name, team_id):
         return True
     except sqlite3.IntegrityError:
         conn.close()
-        return False # المتطوع مسجل مسبقًا بنفس رقم الـ ID
+        return False 
 
 def is_admin(chat_id):
     """التحقق مما إذا كان المستخدم هو المشرف"""
-    # تأكد أن ADMIN_CHAT_ID تم تعيينه كمتغير بيئة
     if not ADMIN_CHAT_ID:
         return False
     return str(chat_id) == str(ADMIN_CHAT_ID)
 
 
-# --------------------------------- العبارات التحفيزية (Motivational Quotes) ---------------------------------
+# --------------------------------- العبارات التحفيزية ---------------------------------
 
 MOTIVATIONAL_QUOTES = [
+    # ... (نفس العبارات التحفيزية السابقة)
     "‏الخير الذي تفعله لا يضيع أبدًا، ستجده في صحيفتك أثراً جميلاً لا يُمحى. ✨",
     "في كل عمل تطوعي، أنت لا تقدم المساعدة للآخرين وحسب، بل تزرع الأمل في قلبك أيضاً. 💚",
     "تذكر دائماً أن أصغر جهد تبذله في مساعدة الآخرين، هو أعظم أثر في ميزان الأجر. 🌟",
@@ -131,7 +204,8 @@ MOTIVATIONAL_QUOTES = [
  APOLOGY_TYPE, INITIATIVE_NAME, APOLOGY_REASON, APOLOGY_NOTES,
  LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
  FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES,
- ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM, ADD_VOLUNTEER_FINALIZE) = range(19)
+ ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM, ADD_VOLUNTEER_FINALIZE,
+ REFERENCES_MENU) = range(20) 
 
 # متغيرات البيئة (Environment Variables)
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -142,8 +216,22 @@ WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 PORT = int(os.environ.get('PORT', '5000')) 
 
 def generate_request_id():
-    """توليد رقم طلب فريد"""
-    return f"REQ{int(time.time())}"
+    """توليد رقم طلب متسلسل يبدأ من 0001"""
+    conn = get_db_connection()
+    try:
+        # زيادة العداد والحصول على القيمة الجديدة
+        cursor = conn.cursor()
+        cursor.execute("UPDATE RequestCounter SET count = count + 1 WHERE id = 1")
+        conn.commit()
+        
+        new_count = conn.execute("SELECT count FROM RequestCounter WHERE id = 1").fetchone()[0]
+        conn.close()
+        # تنسيق الرقم ليكون أربعة خانات (مثال: 0001, 0010)
+        return f"REQ{new_count:04d}"
+    except Exception as e:
+        logger.error(f"خطأ في توليد رقم الطلب: {e}")
+        conn.close()
+        return f"REQ{int(time.time())}" # العودة للتوقيت كخيار احتياطي
 
 def get_request_title(request_type):
     """جلب عنوان الطلب بناءً على نوعه"""
@@ -158,7 +246,7 @@ def get_request_title(request_type):
 # --------------------------------- الدوال الأساسية ---------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """البداية - عرض القائمة الرئيسية"""
+    """البداية - عرض القائمة الرئيسية (تم التعديل لتحرير الرسالة)"""
     query = update.callback_query
     if query:
         await query.answer()
@@ -171,9 +259,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [
         [InlineKeyboardButton("📝 طلب اعتذار", callback_data='apology'),
          InlineKeyboardButton("🏖️ طلب إجازة", callback_data='leave')],
-        [InlineKeyboardButton("🔧 قسم حل المشاكل", callback_data='problem'),
+        [InlineKeyboardButton("🔧 قسم المشاكل", callback_data='problem'),
          InlineKeyboardButton("💡 اقتراحات وملاحظات", callback_data='feedback')],
-        [InlineKeyboardButton("🎁 هدية لطيفة من البوت", callback_data='motivational_gift')]
+        [InlineKeyboardButton("📚 مراجع الفريق", callback_data='references_menu')],
+        [InlineKeyboardButton("☀️ طقس مصياف", callback_data='masyaf_weather'),
+         InlineKeyboardButton("🎁 هدية تحفيزية", callback_data='motivational_gift')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -184,24 +274,77 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         'لإلغاء الطلب في أي وقت، أرسل /cancel'
     )
 
+    # تحرير الرسالة الحالية بدلاً من إرسال رسالة جديدة لتنظيف المحادثة
     if query:
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        try:
+            await query.edit_message_text(text, reply_markup=reply_markup)
+        except Exception:
+             # إذا لم تكن الرسالة قابلة للتحرير، أرسل رسالة جديدة
+             await context.bot.send_message(
+                chat_id=message.chat_id, 
+                text=text, 
+                reply_markup=reply_markup,
+                reply_to_message_id=None
+            )
     else:
         await message.reply_text(text, reply_markup=reply_markup, reply_to_message_id=None)
 
     return MAIN_MENU
 
-# --------------------------------- دالة الهدية التحفيزية ---------------------------------
+# --------------------------------- دوال الأزرار الجديدة ---------------------------------
+
+async def show_masyaf_weather(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """عرض حالة الطقس في مصياف"""
+    query = update.callback_query
+    await query.answer()
+    
+    weather_report = get_masyaf_weather()
+    
+    # رسالة الطقس
+    weather_message = f"🌤️ تقرير الطقس:\n\n{weather_report}"
+
+    await query.message.reply_text(
+        weather_message, 
+        parse_mode='Markdown'
+    )
+    
+    # العودة إلى القائمة الرئيسية
+    return await start(update, context)
+
+async def references_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """عرض قائمة المراجع"""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = [
+        # **تحديث هذه الروابط**
+        [InlineKeyboardButton("📄 مدونة السلوك", url="YOUR_CODE_OF_CONDUCT_LINK_HERE")],
+        [InlineKeyboardButton("📜 القرارات الخاصة بالفريق", url="YOUR_TEAM_DECISIONS_LINK_HERE")],
+        [InlineKeyboardButton("⚙️ تعليمات المركز", url="YOUR_CENTER_INSTRUCTIONS_LINK_HERE")],
+        [InlineKeyboardButton("🎙️ جلسات المركز", url="YOUR_CENTER_SESSIONS_LINK_HERE")],
+        [InlineKeyboardButton("🔙 عودة للقائمة الرئيسية", callback_data='back_to_menu')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    text = (
+        "📚 **مراجع الفريق**\n\n"
+        "يمكنك الوصول إلى المستندات والروابط الهامة الخاصة بالعمل التطوعي والمركز من القائمة أدناه:"
+    )
+
+    await query.edit_message_text(
+        text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return REFERENCES_MENU 
 
 async def send_motivational_gift(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """اختيار وإرسال عبارة تحفيزية عشوائية"""
     query = update.callback_query
     await query.answer()
     
-    # اختيار عبارة عشوائية
     quote = random.choice(MOTIVATIONAL_QUOTES)
     
-    # رسالة الهدية
     gift_message = (
         "🎁 **هدية لطيفة لك!** 🎁\n"
         "━━━━━━━\n"
@@ -210,32 +353,32 @@ async def send_motivational_gift(update: Update, context: ContextTypes.DEFAULT_T
         "شكراً لجهودك وعطائك المتواصل. أنت تصنع فرقاً حقيقياً! 🌟"
     )
 
-    # إظهار رسالة الهدية ثم العودة للقائمة الرئيسية
     await query.message.reply_text(
         gift_message, 
         parse_mode='Markdown'
     )
     
-    # العودة إلى القائمة الرئيسية (باستخدام دالة start للتعامل مع التحرير أو الرسائل الجديدة)
     return await start(update, context)
-
 
 # --------------------------------- دوال القوائم والمسارات ---------------------------------
 
 async def main_menu_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """معالجة اختيار القائمة الرئيسية"""
     query = update.callback_query
-    
     choice = query.data
     
     if choice == 'motivational_gift':
         return await send_motivational_gift(update, context)
+    elif choice == 'masyaf_weather':
+        return await show_masyaf_weather(update, context)
+    elif choice == 'references_menu':
+        return await references_menu(update, context)
         
     await query.answer()
 
     context.user_data.clear() 
     context.user_data['request_type'] = choice
-    context.user_data['request_id'] = generate_request_id()
+    context.user_data['request_id'] = generate_request_id() 
 
     keyboard = [[InlineKeyboardButton("🔙 عودة", callback_data='back_to_menu')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -966,21 +1109,18 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"خطأ في تحديث رسالة المشرف: {e}")
 
-
 async def back_to_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """العودة للقائمة الرئيسية"""
+    """العودة للقائمة الرئيسية (تم التعديل للتحرير)"""
     query = update.callback_query
     if query:
         await query.answer()
 
     context.user_data.clear()
-    return await start(update, context)
-
+    return await start(update, context) 
 
 async def new_request_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """معالجة زر طلب جديد"""
     return await start(update, context)
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """إلغاء المحادثة"""
@@ -993,12 +1133,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.clear()
     return ConversationHandler.END
 
+# --------------------------------- التهيئة والتشغيل ---------------------------------
 
-# --------------------------------- المتغير العالمي ---------------------------------
 application = None
-
-
-# --------------------------------- دالة الإعداد التي تُنفذ مرة واحدة ---------------------------------
 
 def initialize_application() -> None:
     """
@@ -1033,8 +1170,7 @@ def initialize_application() -> None:
         ],
         states={
             MAIN_MENU: [
-                # إضافة motivational_gift كخيار في MAIN_MENU
-                CallbackQueryHandler(main_menu_choice, pattern='^(apology|leave|feedback|problem|motivational_gift)$') 
+                CallbackQueryHandler(main_menu_choice, pattern='^(apology|leave|feedback|problem|motivational_gift|masyaf_weather|references_menu)$') 
             ],
             
             # حالات الطلبات الأساسية
@@ -1087,6 +1223,9 @@ def initialize_application() -> None:
                 CallbackQueryHandler(admin_select_team, pattern=r'^team_id\|\d+$')
             ],
             ADD_VOLUNTEER_FINALIZE: [back_to_menu_handler, MessageHandler(text_message_filter, admin_finalize_volunteer)],
+            
+            # حالة المراجع الجديدة
+            REFERENCES_MENU: [back_to_menu_handler] 
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
