@@ -24,25 +24,39 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # --------------------------------- إعدادات API الطقس (Synoptic Data) ---------------------------------
-# **مفتاح API المقدم من المستخدم**
-WEATHER_API_KEY = "KubmPkihoxS6eNUYVEnJ4wiVDWTQcrZ3EkjQ0VtDtq" 
+ import os
+import requests
+import json
+import logging
+
+# إعداد logging أساسي لتسجيل الأخطاء (ضروري لاستخدام logger.error)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# -----------------------------------------------------------
+# 1. التصحيح الرئيسي: قراءة المفتاح من المتغيرات البيئية
+# -----------------------------------------------------------
+WEATHER_API_KEY = os.environ.get("WEATHER_API_KEY") 
+# تأكد من أنك قمت بتعيين هذا المتغير في إعدادات الاستضافة لديك.
+
 MASYAF_LAT = 35.06  # خط العرض التقريبي لمصياف
 MASYAF_LON = 36.32  # خط الطول التقريبي لمصياف
 SYNOPTIC_BASE_URL = "https://api.synopticdata.com/v1/stations/latest"
 
 def get_masyaf_weather():
     """جلب بيانات الطقس الحالية في مصياف باستخدام Synoptic Data API"""
-    # التحقق من صلاحية المفتاح
-    if not WEATHER_API_KEY or WEATHER_API_KEY == "YOUR_OPENWEATHERMAP_API_KEY":
-        return "❌ لا يمكن جلب بيانات الطقس: مفتاح API غير مضبوط بشكل صحيح."
+    
+    # التحقق من صلاحية المفتاح بعد قراءته من البيئة
+    if not WEATHER_API_KEY:
+        return "❌ لا يمكن جلب بيانات الطقس: مفتاح API (WEATHER_API_KEY) غير مضبوط بشكل صحيح في المتغيرات البيئية."
         
     try:
         # البحث عن أقرب محطة طقس حول إحداثيات مصياف (نطاق 50 كم)
         params = {
             'attime': 'latest',
             'radius': f'{MASYAF_LAT},{MASYAF_LON},50', 
-            'token': WEATHER_API_KEY,
-            'vars': 'air_temp,wind_speed,wind_direction,relative_humidity',
+            'token': WEATHER_API_KEY, # استخدام المتغير المقروء
+            'vars': 'air_temp,wind_speed,relative_humidity',
             'output': 'json',
             'obtimezone': 'local'
         }
@@ -51,7 +65,8 @@ def get_masyaf_weather():
         
         # 1. معالجة أخطاء HTTP الشائعة (مثل 401 للـ API Key)
         if response.status_code == 401:
-            return "❌ خطأ في المفتاح (401): مفتاح API غير صالح أو منتهي الصلاحية. الرجاء التحقق من المفتاح."
+            # رسالة خطأ 401 مفصلة
+            return "❌ خطأ في المفتاح (401): مفتاح API غير صالح أو منتهي الصلاحية. الرجاء التحقق من المفتاح في المتغيرات البيئية."
         response.raise_for_status() 
 
         # 2. معالجة أخطاء JSON
@@ -64,30 +79,26 @@ def get_masyaf_weather():
         # 3. معالجة أخطاء Synoptic (STATUS)
         if data.get('STATUS') != 'OK':
             error_msg = data.get('MESSAGE', 'غير محدد')
+            logger.error(f"خطأ من خدمة Synoptic: {error_msg}")
             return f"❌ خطأ من خدمة الطقس: {error_msg}. (تحقق من المفتاح ورصيد الطلبات)."
             
         if not data.get('STATION'):
-            return "❌ لا توجد محطات طقس قريبة متاحة حالياً ضمن نطاق البحث."
+            return "❌ لا توجد محطات طقس قريبة متاحة حالياً ضمن نطاق البحث (50 كم)."
             
         # نأخذ بيانات أول محطة (الأقرب)
         station_data = data['STATION'][0]
-        readings = station_data.get('SENSOR_OBSERVATIONS', [{}])[0].get('observation', [])
+        # استخدام المتغيرات مباشرة من station_data لتبسيط الكود والتوافق مع الـ 'vars'
         
-        # استخراج المتغيرات بأمان
-        temp = 'غير متوفر'
-        wind = 'غير متوفر'
-        humidity = 'غير متوفر'
+        temp_val = station_data.get('air_temp_set_1', {}).get('value')
+        wind_val = station_data.get('wind_speed_set_1', {}).get('value')
+        humidity_val = station_data.get('relative_humidity_set_1', {}).get('value')
 
-        for obs in readings:
-            if 'air_temp_set_1' in obs and obs['air_temp_set_1'] is not None:
-                temp = f"{float(obs['air_temp_set_1']):.1f}°C"
-            if 'wind_speed_set_1' in obs and obs['wind_speed_set_1'] is not None:
-                wind = f"{float(obs['wind_speed_set_1']):.1f} عقدة"
-            if 'relative_humidity_set_1' in obs and obs['relative_humidity_set_1'] is not None:
-                humidity = f"{float(obs['relative_humidity_set_1'])}%"
+        temp = f"{float(temp_val):.1f}°C" if temp_val is not None else 'غير متوفر'
+        wind = f"{float(wind_val):.1f} عقدة" if wind_val is not None else 'غير متوفر'
+        humidity = f"{float(humidity_val)}%" if humidity_val is not None else 'غير متوفر'
         
         obs_time = station_data.get('OBSERVATION_TIME_LOCAL')
-        time_display = f" (آخر رصد: {obs_time.split('T')[1].split('+')[0]})" if obs_time else ""
+        time_display = f" (آخر رصد: {obs_time.split('T')[1].split('+')[0]})" if obs_time and 'T' in obs_time else ""
 
         return (
             f"☀️ **حالة الطقس في منطقة مصياف:**{time_display}\n"
@@ -96,15 +107,20 @@ def get_masyaf_weather():
             f"• سرعة الرياح: {wind}\n"
             f"• الرطوبة: {humidity}"
         )
+        
     except requests.exceptions.HTTPError as e:
         logger.error(f"خطأ في الاتصال HTTP: {e.response.status_code} - {e.response.text}")
         return f"⚠️ حدث خطأ في الاتصال (HTTP {e.response.status_code})."
     except requests.exceptions.RequestException as e:
         logger.error(f"خطأ في الاتصال بواجهة Synoptic Data: {e}")
-        return "⚠️ حدث خطأ أثناء الاتصال بخدمة الطقس. (الرجاء التحقق من المفتاح أو الاتصال بالشبكة)."
+        return "⚠️ حدث خطأ أثناء الاتصال بخدمة الطقس. (الرجاء التحقق من الاتصال بالشبكة)."
     except Exception as e:
-        logger.error(f"خطأ غير متوقع في جلب الطقس: {e}")
+        logger.error(f"خطأ غير متوقع في جلب الطقس: {e}", exc_info=True)
         return "❌ حدث خطأ غير متوقع في جلب البيانات."
+
+# مثال على الاستخدام (للاختبار)
+# if __name__ == '__main__':
+#     print(get_masyaf_weather())
 
 # --------------------------------- إعداد قاعدة البيانات ---------------------------------
 
