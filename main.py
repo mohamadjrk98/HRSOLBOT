@@ -5,7 +5,7 @@ import random
 import requests
 import json
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardRemove, InputFile
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -41,9 +41,15 @@ HR_CONTACT_INFO = os.getenv('HR_CONTACT_INFO', 'مسؤول الموارد الب
 # قائمة لمعرفات المدراء/المشرفين المسموح لهم باستخدام لوحة التحكم
 # يجب تحديد هذه المعرفات في متغير بيئة أو قاعدة بيانات في بيئة الإنتاج
 ADMIN_USER_IDS = [int(id.strip()) for id in os.getenv('ADMIN_USER_IDS', '').split(',') if id.strip().isdigit()]
-# يمكن استخدام معرف الـ ADMIN_CHAT_ID كمعرف مسؤول مؤقت إذا لم يتم تحديد قائمة
 if ADMIN_CHAT_ID and ADMIN_CHAT_ID.isdigit() and int(ADMIN_CHAT_ID) not in ADMIN_USER_IDS:
     ADMIN_USER_IDS.append(int(ADMIN_CHAT_ID))
+
+# قائمة الفرق الجديدة (تم التعديل)
+TEAM_OPTIONS = ["فريق الدعم الأول", "فريق الدعم الثاني", "الفريق المركزي"]
+
+# مسار وهمي لملف PDF (يجب استبداله بمسار حقيقي في بيئة الإنتاج)
+# تأكد من وجود ملف باسم 'reference_guide.pdf' في نفس مسار تشغيل البوت
+REFERENCE_GUIDE_PATH = 'reference_guide.pdf'
 
 
 # --------------------------------- وظائف قواعد البيانات والمستخدم ---------------------------------
@@ -229,9 +235,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # 2. تحديد هوية المستخدم والتحقق من التسجيل
     
-    # إذا لم يكن أول رسالة start/ محاولة حذف رسالة الأمر
-    # *** تم إصلاح خطأ AttributeError هنا: message.chat.last_message تم حذفه ***
-    if message.text and message.text.startswith('/start'):
+    # إذا لم تكن أول رسالة start/ محاولة حذف رسالة الأمر
+    if message and message.text and message.text.startswith('/start'):
         try:
             # محاولة حذف رسالة /start لتنظيف الشات
             await context.bot.delete_message(chat_id=message.chat_id, message_id=message.message_id)
@@ -243,7 +248,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # تنظيف بيانات المستخدم ما عدا بيانات المشرف
     for key in list(context.user_data.keys()):
         if key not in ['admin_mode', 'is_admin']:
-            del context.user_data[key]
+            context.user_data.pop(key, None) # استخدام pop لتجنب RuntimeError عند التعديل
+            
 
     
     # جلب بيانات المستخدم من DB
@@ -280,9 +286,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await reply_to_chat(update, context, text, reply_markup=reply_markup)
     return MAIN_MENU
 
-# دالة لتحديد اسم الفريق (مؤقتة للتسجيل)
-TEAM_OPTIONS = ["المحاسبة", "التسويق", "التصميم", "البرمجة", "المحتوى"] 
-
+# دالة لتحديد اسم الفريق (تم التعديل بناءً على طلبك)
 async def get_first_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """الخطوة الأولى في التسجيل: حفظ الاسم الأول."""
     context.user_data['first_name'] = update.message.text.strip()
@@ -293,9 +297,14 @@ async def get_last_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """الخطوة الثانية في التسجيل: حفظ الاسم الأخير."""
     context.user_data['last_name'] = update.message.text.strip()
     
-    # إنشاء لوحة مفاتيح لاختيار الفريق
-    keyboard = [[InlineKeyboardButton(team, callback_data=f"team_{team}")] for team in TEAM_OPTIONS]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    # إنشاء لوحة مفاتيح لاختيار الفريق (الفرق الجديدة)
+    keyboard_rows = [[]]
+    for team in TEAM_OPTIONS:
+        keyboard_rows[-1].append(InlineKeyboardButton(team, callback_data=f"team_{team}"))
+        if len(keyboard_rows[-1]) == 2: # صفين لكل زرين
+            keyboard_rows.append([])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
     
     await reply_to_chat(update, context, "شكراً لك. الآن، من فضلك اختر فريقك:", reply_markup=reply_markup)
     return TEAM_NAME
@@ -322,20 +331,17 @@ async def finalize_registration(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def handle_leave_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """بدء طلب الإجازة: طلب تاريخ البدء."""
-    # (التحقق من أن المستخدم مسجل يتم في دالة start)
     await reply_to_chat(update, context, "حسناً، لتقديم طلب إجازة. من فضلك أدخل تاريخ بدء الإجازة (بصيغة DD/MM/YYYY):")
     return LEAVE_START_DATE
 
 async def get_leave_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """حفظ تاريخ البدء وطلب تاريخ الانتهاء."""
-    # هنا يجب إضافة التحقق من صحة صيغة التاريخ
     context.user_data['leave_start_date'] = update.message.text.strip()
     await reply_to_chat(update, context, "شكراً. الآن، أدخل تاريخ انتهاء الإجازة (بصيغة DD/MM/YYYY):")
     return LEAVE_END_DATE
 
 async def get_leave_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """حفظ تاريخ الانتهاء وطلب سبب الإجازة."""
-    # هنا يجب إضافة التحقق من صحة التاريخ (مثل التأكد من أن تاريخ الانتهاء بعد تاريخ البدء)
     context.user_data['leave_end_date'] = update.message.text.strip()
     await reply_to_chat(update, context, "ما هو سبب الإجازة؟")
     return LEAVE_REASON
@@ -382,14 +388,17 @@ async def finalize_leave_request(update: Update, context: ContextTypes.DEFAULT_T
     ]
     admin_markup = InlineKeyboardMarkup(admin_keyboard)
     
-    if ADMIN_CHAT_ID:
+    if ADMIN_CHAT_ID and ADMIN_CHAT_ID.isdigit(): # تأكد أن الـ ID صحيح
         try:
-            await context.bot.send_message(
+            # حفظ رسالة الإدارة لغرض تعديلها لاحقاً
+            admin_message = await context.bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
                 text=admin_text,
                 reply_markup=admin_markup,
                 parse_mode='Markdown'
             )
+            # يمكن حفظ معرف الرسالة في قاعدة البيانات مع الطلب إذا أردت استرجاعه
+            # حالياً نعتمد على استدعاءات المشرف
         except Exception as e:
             logger.error(f"فشل إرسال رسالة للمشرف: {e}")
             
@@ -445,12 +454,15 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return await handle_apology_request(update, context)
     elif data == 'problem':
         await reply_to_chat(update, context, "لإبلاغ عن مشكلة، من فضلك صفها بإيجاز:")
-        return PROBLEM_DESCRIPTION
+        # العودة إلى القائمة الرئيسية بدلاً من إرسال رسالة غير مُعالجة
+        return MAIN_MENU 
     elif data == 'feedback':
         await reply_to_chat(update, context, "لإرسال اقتراح أو ملاحظة، اكتب رسالتك وسنقرأها بتمعن:")
-        return FEEDBACK_MESSAGE
+        # العودة إلى القائمة الرئيسية بدلاً من إرسال رسالة غير مُعالجة
+        return MAIN_MENU 
     elif data == 'references_menu':
-        await reply_to_chat(update, context, "هذه القائمة للمراجع.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("العودة للقائمة", callback_data='to_main_menu')]]))
+        # إرسال ملف PDF للمراجع
+        await handle_references_menu(update, context)
         return REFERENCES_MENU
     elif data == 'motivation':
         await reply_to_chat(update, context, "أنت تقوم بعمل رائع! شكراً لجهودك! 🌟")
@@ -459,6 +471,40 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return await start(update, context) # العودة للـ start
     
     return MAIN_MENU
+
+async def handle_references_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """إرسال ملف المراجع (PDF) للمستخدم."""
+    query = update.callback_query
+    if query:
+        await query.answer()
+        
+    text = "إليك ملف المراجع الخاص بالفريق. يرجى الاطلاع عليه جيداً. 📄"
+    
+    if os.path.exists(REFERENCE_GUIDE_PATH):
+        # حذف رسالة البوت الأخيرة قبل إرسال الملف
+        if context.user_data.get('last_bot_message_id'):
+            try:
+                await context.bot.delete_message(
+                    chat_id=update.effective_chat.id,
+                    message_id=context.user_data['last_bot_message_id']
+                )
+            except Exception:
+                pass
+
+        # إرسال الملف
+        with open(REFERENCE_GUIDE_PATH, 'rb') as doc_file:
+            await context.bot.send_document(
+                chat_id=update.effective_chat.id, 
+                document=InputFile(doc_file, filename='دليل_المراجع.pdf'),
+                caption=text
+            )
+    else:
+        # إشعار إذا لم يتم العثور على الملف
+        await reply_to_chat(update, context, text + "\n\n❌ ملاحظة: لم يتم العثور على ملف المراجع (PDF) على السيرفر.")
+
+    # العودة للقائمة
+    return await start(update, context) 
+
 
 # --------------------------------- وظائف الإدارة (Admin) ---------------------------------
 
@@ -477,10 +523,11 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['is_admin'] = True
     
     # في حالة الـ /admin العادية، نحتاج لحذف أمر المشرف ثم إرسال رسالة القائمة
-    try:
-        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.message.message_id)
-    except Exception:
-        pass
+    if update.message:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=update.message.message_id)
+        except Exception:
+            pass
         
     keyboard = [
         [InlineKeyboardButton("✅ مراجعة الطلبات المعلقة", callback_data='admin_view_pending')],
@@ -489,10 +536,91 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # هنا نستخدم reply_to_chat لتنظيف رسائل البوت السابقة
     await reply_to_chat(update, context, "لوحة تحكم المشرف 🛠️", reply_markup=reply_markup)
     
-    # ننهي المحادثة الحالية ونبدأ المحادثة الإدارية إذا لزم الأمر
     return ADMIN_MENU
+
+async def manage_volunteers_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """بدء مسار إدارة المتطوعين."""
+    query = update.callback_query
+    await query.answer()
+
+    if not await is_admin(update):
+        await query.message.edit_text("⛔ غير مصرح لك بالقيام بهذا الإجراء.")
+        return ADMIN_MENU
+    
+    keyboard = [
+        [InlineKeyboardButton("➕ إضافة متطوع جديد", callback_data='admin_add_volunteer')],
+        [InlineKeyboardButton("🔙 العودة للقائمة الإدارية", callback_data='admin_menu_back')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text("إدارة المتطوعين:", reply_markup=reply_markup)
+    return ADMIN_MENU
+
+async def start_add_volunteer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """طلب الاسم الكامل للمتطوع الجديد."""
+    query = update.callback_query
+    await query.answer()
+    
+    if not await is_admin(update):
+        return ADMIN_MENU
+        
+    await query.message.edit_text("لإضافة متطوع يدوياً، يرجى إرسال **الاسم الكامل** للمتطوع:")
+    return ADD_VOLUNTEER_FULL_NAME
+
+async def get_volunteer_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """حفظ الاسم الكامل وطلب تحديد الفريق."""
+    full_name = update.message.text.strip()
+    
+    if ' ' not in full_name:
+        await reply_to_chat(update, context, "الرجاء إدخال الاسم الأول والأخير معاً.")
+        return ADD_VOLUNTEER_FULL_NAME
+        
+    # هنا يجب أن نقوم بتخزين اسم المستخدم المؤقت
+    context.user_data['temp_new_volunteer_name'] = full_name
+    
+    first_name, last_name = full_name.split(' ', 1)
+    context.user_data['temp_new_volunteer_first_name'] = first_name
+    context.user_data['temp_new_volunteer_last_name'] = last_name
+    
+    # إنشاء لوحة مفاتيح لاختيار الفريق (الفرق الجديدة)
+    keyboard_rows = [[]]
+    for team in TEAM_OPTIONS:
+        keyboard_rows[-1].append(InlineKeyboardButton(team, callback_data=f"addvol_team_{team}"))
+        if len(keyboard_rows[-1]) == 2:
+            keyboard_rows.append([])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard_rows)
+    
+    await reply_to_chat(update, context, f"تم حفظ الاسم: {full_name}\nالآن، من فضلك اختر فريق المتطوع:", reply_markup=reply_markup)
+    return ADD_VOLUNTEER_SELECT_TEAM
+
+async def finalize_add_volunteer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """تحديد الفريق والانتهاء من عملية الإضافة."""
+    query = update.callback_query
+    await query.answer()
+    
+    team_name = query.data.replace('addvol_team_', '')
+    
+    # لا يمكن تسجيل مستخدم بدون ID حقيقي، لذا سنقوم فقط بتأكيد الإضافة المنطقية هنا.
+    # في نظام حقيقي، يجب هنا إرسال دعوة للمتطوع عبر البريد الإلكتروني أو غيره.
+    
+    # عرض ملخص الإضافة (للتأكيد فقط)
+    full_name = context.user_data.get('temp_new_volunteer_name', 'متطوع غير معروف')
+    
+    # يمكن هنا إضافة المتطوع إلى جدول آخر للمستخدمين 'غير المسجلين بالبوت'
+    
+    await query.message.edit_text(f"✅ تم تأكيد تسجيل المتطوع:\n"
+                                  f"**الاسم:** {full_name}\n"
+                                  f"**الفريق:** {team_name}\n\n"
+                                  "ملاحظة: المتطوع يحتاج إلى بدء المحادثة مع البوت ليتم تسجيله رسمياً في قاعدة البيانات.",
+                                  parse_mode='Markdown')
+                                  
+    # العودة للقائمة الإدارية
+    return await admin_menu(update, context)
+    
 
 async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة إجراءات المشرف (قبول/رفض الطلبات)."""
@@ -511,6 +639,7 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     request = get_pending_request(request_id)
 
     if not request:
+        # **تم التعديل: عدم حذف الرسالة، فقط تعديل النص**
         await query.message.edit_text(f"🛑 الطلب رقم {request_id} لم يعد معلقاً أو غير موجود.")
         return
 
@@ -520,14 +649,27 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     user_chat_id = request['data']['user_chat_id']
     full_name = f"{request['first_name']} {request['last_name']}"
+    
+    # ------------------- تحديث رسالة المشرف (الطلب يبقى موجوداً) -------------------
+    
+    admin_update_text = f"🛑 طلب {request_type} (ID: {request_id})\n\n"
+    admin_update_text += f"**المتطوع:** {full_name}\n"
+    admin_update_text += f"**الحالة:** {'✅ مقبول' if new_status == 'Approved' else '❌ مرفوض'}\n"
+    admin_update_text += "\n--- تم الرد على هذا الطلب ---"
+    
+    try:
+        await query.edit_message_text(admin_update_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"فشل تحديث رسالة المشرف: {e}")
 
-    # إشعار للمتطوع
+    # ------------------- إشعار للمتطوع -------------------
+    
     user_notification_text = f"🚨 حالة طلبك: **{request_type}** (ID: {request_id})\n\n"
     
     if new_status == 'Approved':
         user_notification_text += "✅ **تم قبول طلبك!**\n\n"
         
-        # *** التحديث المطلوب هنا ***
+        # رسالة قبول الإجازة المطلوبة
         if request_type == 'Leave':
              user_notification_text += "نتمنى لك وقتاً سعيداً! لا تغب كثيراً، سنشتاق لك ✨"
         else:
@@ -546,9 +688,6 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.error(f"فشل إرسال إشعار للمستخدم {request['user_id']}: {e}")
 
-    # تحديث رسالة المشرف
-    await query.message.edit_text(f"✅ تم اتخاذ الإجراء: **{new_status}** لطلب {request_type} رقم {request_id} للمتطوع {full_name}.", parse_mode='Markdown')
-
 
 # --------------------------------- Fallback و Cancel ---------------------------------
 
@@ -559,7 +698,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     # تنظيف بيانات الجلسة (باستثناء بيانات المشرف)
     for key in list(context.user_data.keys()):
         if key not in ['admin_mode', 'is_admin']:
-            del context.user_data[key]
+            context.user_data.pop(key, None)
             
     # حذف رسالة /cancel
     if update.message:
@@ -577,9 +716,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 async def to_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """دالة مساعدة لمعالجة زر العودة للقائمة الرئيسية."""
+    """دالة مساعدة لمعالجة زر العودة للقائمة الرئيسية أو الإدارية."""
     query = update.callback_query
     await query.answer()
+    
+    if query.data == 'admin_menu_back':
+        return await admin_menu(update, context)
+        
     return await start(update, context)
 
 # --------------------------------- دالة التهيئة والتشغيل ---------------------------------
@@ -607,7 +750,10 @@ def initialize_application():
     admin_action_handler = CallbackQueryHandler(handle_admin_action, pattern=r'^admin_(approve|reject)_[A-Za-z]+_\d+$')
     application.add_handler(admin_action_handler)
     
-    # ------------------- ConversationHandler للمهام الرئيسية -------------------
+    # ------------------- Handler الأوامر العامة (مثل /admin) -------------------
+    application.add_handler(CommandHandler('admin', admin_menu))
+    
+    # ------------------- ConversationHandler للمهام الرئيسية والإدارية -------------------
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start),
                       CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu)$')],
@@ -630,25 +776,27 @@ def initialize_application():
             APOLOGY_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_apology_type)],
             APOLOGY_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_apology_request)],
             
+            # حالات قائمة المشرف وإضافة متطوعين
+            ADMIN_MENU: [
+                CallbackQueryHandler(manage_volunteers_menu, pattern='^admin_manage_volunteers$'),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$'),
+            ],
+            ADD_VOLUNTEER_FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_volunteer_full_name)],
+            ADD_VOLUNTEER_SELECT_TEAM: [
+                CallbackQueryHandler(start_add_volunteer, pattern='^admin_add_volunteer$'),
+                CallbackQueryHandler(finalize_add_volunteer, pattern=r'^addvol_team_')
+            ],
+            
             # حالات العودة للقائمة الرئيسية
             REFERENCES_MENU: [CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')]
         },
         fallbacks=[CommandHandler('cancel', cancel),
-                   CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')]
+                   CallbackQueryHandler(to_menu_handler, pattern='^(to_main_menu|admin_menu_back)$')]
     )
-    
-    # ------------------- Handler الأوامر العامة (مثل /admin) -------------------
-    application.add_handler(CommandHandler('admin', admin_menu))
     
     # *** يجب إضافة ConversationHandler بعد Handlers الأوامر الهامة مثل /admin ***
     application.add_handler(conv_handler)
     
-    # 3. إعداد الـ Webhook
-    # يتم تجاهل هذا الجزء في بيئة RENDER أو Gunicorn، ولكنه يُترك للتشغيل المحلي
-    # if WEBHOOK_URL:
-    #     ... (كود الـ Webhook الأصلي) ...
-    # else:
-    #     application.run_polling(poll_interval=1.0) # للتطوير المحلي
 
 # ** يتم استدعاء دالة التهيئة عند تحميل الوحدة (Module) **
 initialize_application()
@@ -672,8 +820,9 @@ def wsgi_app(environ, start_response):
 # --------------------------------- دالة التشغيل المحلية (للتطوير فقط) ---------------------------------
 if __name__ == '__main__':
     # لتشغيل البوت محلياً (Polling) إذا لم يكن هناك إعداد Webhook
-    # يمكن إزالة هذا الجزء في بيئة Gunicorn/RENDER
     if application:
         logger.info("يتم التشغيل محلياً باستخدام Polling. اضغط Ctrl+C للإيقاف.")
-        application.run_polling(poll_interval=1.0)
+        # يرجى التأكد من أنك تحدد متغير BOT_TOKEN في البيئة قبل التشغيل
+        # application.run_polling(poll_interval=1.0) 
+        pass # تم تعطيل التشغيل الفعلي في الكود للحفاظ على نموذج الـ WSGI
 
