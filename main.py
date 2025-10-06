@@ -140,7 +140,13 @@ def initialize_application():
 
 # ---------------- WSGI Entry Point ----------------
 def wsgi_app(environ, start_response):
-    if application is None:
-        initialize_application()
-    start_response('200 OK', [('Content-Type', 'text/plain')])
-    return [b'Bot is running']
+    global application
+    try:
+        if application is None:
+            initialize_application()
+        start_response('200 OK', [('Content-Type', 'text/plain')])
+        return [b'Bot is running']
+    except Exception as e:
+        import traceback
+        start_response('500 INTERNAL SERVER ERROR', [('Content-Type', 'text/plain')])
+        return [traceback.format_exc().encode('utf-8')]
