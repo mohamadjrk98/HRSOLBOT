@@ -316,5 +316,186 @@ async def confirm_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         fields = {
             "الاسم الكامل": data.get('full_name'),
             "الفريق": data.get('team_name'),
-            "تاريخ البدء": data.
+            "تاريخ البدء": data.get('leave_start_date'),
+            "تاريخ الانتهاء": data.get('leave_end_date'),
+            "السبب": data.get('leave_reason'),
+            "ملاحظات": data.get('leave_notes'),
+        }
+    elif 'initiative_name' in data:
+        title = "مقترح/مبادرة"
+        fields = {
+            "الاسم الكامل": data.get('full_name'),
+            "الفريق": data.get('team_name'),
+            "اسم المقترح": data.get('initiative_name'),
+            "التفاصيل": data.get('initiative_details'), # تم إضافة فاصلة (comma) هنا
+        }
+    elif 'problem_description' in data:
+        title = "ملاحظة/شكوى"
+        fields = {
+            "الاسم الكامل": data.get('full_name'),
+            "الفريق": data.get('team_name'),
+            "الوصف": data.get('problem_description'),
+            "ملاحظات/أدلة": data.get('problem_notes'),
+        }
+    
+    await send_to_admin(context, title, fields)
+    
+    await update.message.reply_text(
+        f"✅ تم إرسال طلبك ({title}) بنجاح إلى مسؤول الموارد البشرية للمتابعة.\nشكراً لك.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    
+    context.user_data.clear()
+    return MAIN_MENU
+
+async def fallback_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """معالج الإلغاء/الإيقاف لأي محادثة جارية."""
+    await update.message.reply_text(
+        "❌ تم إلغاء العملية. يمكنك البدء من جديد من القائمة الرئيسية.",
+        reply_markup=get_main_menu_keyboard()
+    )
+    context.user_data.clear()
+    return MAIN_MENU
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """عرض قائمة الأوامر المتاحة."""
+    help_text = (
+        "مرحباً بك في نظام الموارد البشرية لفريق أبناء الأرض.\n"
+        "إليك قائمة الأوامر المتاحة:\n"
+        "• /start - بدء المحادثة والعودة للقائمة الرئيسية.\n"
+        "• /help - عرض هذه الرسالة.\n"
+        "\n"
+        "يمكنك استخدام الأزرار في القائمة لتقديم الطلبات."
+    )
+    await update.message.reply_text(help_text, reply_markup=get_main_menu_keyboard())
+
+# -------------------------- FIX: Refactor set_bot_commands for post_init --------------------------
+
+async def set_bot_commands(app: Application) -> None:
+    """تعيين قائمة الأوامر للبوت باستخدام post_init لحل مشكلة JobQueue في بيئة Webhook."""
+    bot_commands = [
+        BotCommand("start", "بدء المحادثة والعودة للقائمة الرئيسية"),
+        BotCommand("help", "عرض المساعدة والأوامر المتاحة"),
+    ]
+    await app.bot.set_my_commands(bot_commands)
+
+# --------------------------------- إعداد البوت (Initialization) ---------------------------------
+
+application: Optional[Application] = None
+
+def initialize_application():
+    """تهيئة تطبيق python-telegram-bot والـ Handlers."""
+    global application
+
+    if not BOT_TOKEN:
+        logger.error("🚫 BOT_TOKEN غير مُعرف في متغيرات البيئة. لا يمكن بدء البوت.")
+        return
+
+    try:
+        app = Application.builder().token(BOT_TOKEN).build()
+
+        conv_handler = ConversationHandler(
+            entry_points=[CommandHandler("start", start)],
+            states={
+                MAIN_MENU: [
+                    MessageHandler(filters.Regex("^(اعتذار عن مهمة|إجازة/انقطاع|تقديم مقترح/مبادرة|ملاحظة/شكوى|معلومات الاتصال بالموارد البشرية)"), main_menu),
+                ],
+                FULL_NAME: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_full_name),
+                ],
+                TEAM_NAME: [
+                    MessageHandler(filters.Regex(f"^({'|'.join(TEAM_NAMES)}|إلغاء ❌)$"), handle_team_name),
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_team_name), 
+                ],
+                
+                # حالات الاعتذار
+                APOLOGY_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_apology_type)],
+                INITIATIVE_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_apology_reason)], 
+                APOLOGY_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_apology_notes)],
+                
+                # حالات الإجازة
+                LEAVE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_start_date)],
+                LEAVE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_end_date)],
+                LEAVE_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_reason)],
+                LEAVE_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_notes)],
+
+                # حالات المقترح والشكوى
+                INITIATIVE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_initiative_name)],
+                PROBLEM_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_details)],
+                PROBLEM_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_notes)],
+
+                # حالات التأكيد العامة (APOLOGY_NOTES + 1 هي 7, LEAVE_NOTES + 1 هي 11, PROBLEM_NOTES + 1 هي 14)
+                APOLOGY_NOTES + 1: [
+                    MessageHandler(filters.Regex("^تأكيد وإرسال ✅$"), confirm_and_send),
+                    MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
+                ],
+                LEAVE_NOTES + 1: [
+                    MessageHandler(filters.Regex("^تأكيد وإرسال ✅$"), confirm_and_send),
+                    MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
+                ],
+                PROBLEM_NOTES + 1: [
+                    MessageHandler(filters.Regex("^تأكيد وإرسال ✅$"), confirm_and_send),
+                    MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
+                ],
+            },
+            fallbacks=[
+                CommandHandler("start", start),
+                CommandHandler("cancel", fallback_to_main_menu),
+                MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu)
+            ],
+            per_user=True, 
+            per_chat=False,
+            allow_reentry=True
+        )
+
+        app.add_handler(conv_handler)
+        app.add_handler(CommandHandler("help", help_command))
+
+        # استخدام post_init بدلاً من job_queue.run_once لحل مشكلة 'NoneType' في بيئة Webhook/Gunicorn.
+        app.post_init = set_bot_commands
+
+        application = app
+        logger.info("تمت تهيئة تطبيق البوت بنجاح.")
+
+    except Exception as e:
+        logger.error(f"فشل في تهيئة التطبيق: {e}")
+
+# --------------------------------- دالة WSGI لـ Render ---------------------------------
+def wsgi_app(environ, start_response):
+    """نقطة الدخول (Entry Point) لتطبيق WSGI المستخدم من قبل Gunicorn و Render."""
+    global application
+    
+    if application is None:
+        initialize_application()
+
+    if application is None:
+        status = '500 INTERNAL SERVER ERROR'
+        headers = [('Content-type', 'text/plain')]
+        start_response(status, headers)
+        return [b"Application not initialized or BOT_TOKEN is missing."]
+        
+    return application.webhooks(environ, start_response)
+
+
+# --------------------------------- دالة التشغيل المحلية (للتطوير فقط) ---------------------------------
+if __name__ == '__main__':
+    if BOT_TOKEN:
+        if application is None:
+            initialize_application()
+            
+        if application:
+            if WEBHOOK_URL:
+                logger.info(f"يتم إعداد الويب هوك على المنفذ: {PORT}")
+                application.run_webhook( 
+                    listen="0.0.0.0",
+                    port=PORT,
+                    url_path=BOT_TOKEN,
+                    webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}",
+                    drop_pending_updates=True
+                )
+            else:
+                logger.info("يتم التشغيل محلياً باستخدام Polling. اضغط Ctrl+C للإيقاف.")
+                application.run_polling(poll_interval=1.0)
+    else:
+        logger.error("🚫 BOT_TOKEN غير مُعرف. يرجى تعيينه في متغيرات البيئة.")
 
