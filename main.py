@@ -339,3 +339,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "استخدم الأزرار في القائمة للمتابعة."
     )
     await update.message.reply
+INITIATIVE_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_and_send)],
+            PROBLEM_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_details)],
+            PROBLEM_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_notes)],
+            PROBLEM_CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_and_send)],
+        },
+        fallbacks=[CommandHandler("start", start)],
+    )
+
+    application.add_handler(conv_handler)
+    application.add_handler(CommandHandler("help", help_command))
+
+    logger.info("✅ البوت جاهز ويعمل باستخدام Polling. بدء التشغيل...")
+    application.run_polling()
