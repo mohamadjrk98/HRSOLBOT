@@ -31,20 +31,22 @@ HR_CONTACT_INFO: Final[str] = os.getenv('HR_CONTACT_INFO', 'مسؤول المو�
 
 # متغيرات خاصة بالـ Webhook (لبيئة الإنتاج مثل Render)
 WEBHOOK_URL: Final[str | None] = os.getenv('WEBHOOK_URL')
-PORT: Final[int] = int(os.getenv('PORT', 8080)) # المنفذ الافتراضي لـ Render هو $PORT
+# المنفذ: نعتمد على متغير البيئة $PORT الذي يوفره Render، و 8080 كافتراضي للبيئة المحلية
+PORT: Final[int] = int(os.getenv('PORT', 8080)) 
 
 # --------------------------------- تعريف الحالات والثوابت ---------------------------------
 
 # الحالات (States) المستخدمة في ConversationHandler
+# تم إعادة استخدام بعض الحالات الموجودة لتحديد مسارات "المقترح" و "الشكوى"
 (
     MAIN_MENU, FULL_NAME, TEAM_NAME,
-    APOLOGY_TYPE, INITIATIVE_NAME, APOLOGY_REASON, APOLOGY_NOTES,
+    APOLOGY_TYPE, INITIATIVE_NAME, INITIATIVE_DETAILS, APOLOGY_NOTES, # تم تغيير APOLOGY_REASON -> INITIATIVE_DETAILS
     LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
-    FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION, PROBLEM_NOTES,
+    PROBLEM_DETAILS, PROBLEM_DESCRIPTION, PROBLEM_NOTES, # تم تغيير FEEDBACK_MESSAGE -> PROBLEM_DETAILS
     ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM
 ) = range(17)
 
-# قائمة فرق العمل (يمكن توسيعها/جلبها من قاعدة بيانات)
+# قائمة فرق العمل
 TEAM_NAMES: Final[list[str]] = ["فريق الإعلام", "فريق التنسيق", "فريق الدعم اللوجستي", "إدارة المشروع"]
 
 # --------------------------------- الدوال المساعدة (Utility Functions) ---------------------------------
@@ -108,13 +110,10 @@ async def send_to_admin(context: ContextTypes.DEFAULT_TYPE, title: str, fields: 
 # --------------------------------- معالجات المحادثة (Conversation Handlers) ---------------------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    يبدأ المحادثة ويعرض القائمة الرئيسية.
-    """
-    # حفظ بيانات المستخدم الأساسية
+    """يبدأ المحادثة ويعرض القائمة الرئيسية."""
     user = update.effective_user
+    context.user_data.clear() # مسح البيانات في بداية كل محادثة جديدة
     context.user_data['user_id'] = user.id
-    context.user_data['full_name'] = user.full_name
     
     await update.message.reply_text(
         f"أهلاً بك يا {user.first_name} في نظام الموارد البشرية لفريق أبناء الأرض. كيف يمكنني خدمتك؟",
@@ -123,24 +122,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return MAIN_MENU
 
 async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    يتلقى خيار المستخدم ويوجهه إلى المحادثة المناسبة.
-    """
+    """يتلقى خيار المستخدم ويوجهه إلى المحادثة المناسبة."""
     text = update.message.text
     context.user_data.clear() # مسح البيانات من الجلسة السابقة
     context.user_data['user_id'] = update.effective_user.id
     
-    await update.message.reply_text("يرجى إرسال اسمك الكامل لبدء العملية.", reply_markup=ReplyKeyboardRemove())
-    
-    # تحديد الهدف ليتم التوجيه إليه بعد إدخال الاسم
+    # تحديد الهدف ليتم التوجيه إليه بعد إدخال الاسم والفريق
     if "اعتذار" in text:
         context.user_data['next_step'] = APOLOGY_TYPE
+        action_name = "طلب اعتذار"
     elif "إجازة" in text:
         context.user_data['next_step'] = LEAVE_START_DATE
+        action_name = "طلب إجازة"
     elif "مقترح" in text:
         context.user_data['next_step'] = INITIATIVE_NAME
+        action_name = "تقديم مقترح"
     elif "ملاحظة" in text or "شكوى" in text:
-        context.user_data['next_step'] = PROBLEM_DESCRIPTION
+        context.user_data['next_step'] = PROBLEM_DETAILS
+        action_name = "تقديم شكوى/ملاحظة"
     elif "معلومات الاتصال" in text:
         await update.message.reply_text(
             f"يمكنك التواصل مع:\n\n{HR_CONTACT_INFO}",
@@ -151,39 +150,38 @@ async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("خيار غير صالح. يرجى اختيار أحد الأزرار من القائمة.", reply_markup=get_main_menu_keyboard())
         return MAIN_MENU
     
+    await update.message.reply_text(f"لبدء عملية {action_name}، يرجى إرسال اسمك الكامل:", reply_markup=ReplyKeyboardRemove())
     return FULL_NAME
 
 async def handle_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    يخزن الاسم الكامل وينتقل إلى الخطوة التالية المحددة.
-    """
+    """يخزن الاسم الكامل وينتقل إلى خطوة اختيار الفريق."""
     full_name = update.message.text
-    if len(full_name) < 3 or not all(c.isalpha() or c.isspace() for c in full_name):
+    # تحسين تحقق الاسم لتقبل الأبجدية العربية أيضاً
+    if len(full_name) < 3 or not all(c.isalpha() or c.isspace() or '\u0600' <= c <= '\u06FF' for c in full_name):
         await update.message.reply_text("يرجى إدخال اسم كامل وصحيح (ثلاثة أحرف على الأقل، أحرف ومسافات فقط).")
         return FULL_NAME
 
     context.user_data['full_name'] = full_name
-    next_step = context.user_data.pop('next_step', MAIN_MENU) # استعادة الخطوة التالية
     
     # الانتقال لخطوة اختيار الفريق
     await update.message.reply_text(
         "شكراً لك. الآن، يرجى اختيار الفريق الذي تنتمي إليه:",
         reply_markup=get_team_selection_keyboard()
     )
-    context.user_data['next_step_after_team'] = next_step # حفظ الخطوة الحقيقية بعد اختيار الفريق
     return TEAM_NAME
 
 async def handle_team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    يخزن اسم الفريق وينتقل إلى الخطوة الحقيقية التالية.
-    """
+    """يخزن اسم الفريق وينتقل إلى الخطوة الحقيقية التالية."""
     team_name = update.message.text
+    if team_name == "إلغاء ❌":
+        return await fallback_to_main_menu(update, context)
+
     if team_name not in TEAM_NAMES:
         await update.message.reply_text("يرجى اختيار فريق من القائمة أو الضغط على إلغاء.", reply_markup=get_team_selection_keyboard())
         return TEAM_NAME
         
     context.user_data['team_name'] = team_name
-    next_step = context.user_data.pop('next_step_after_team', MAIN_MENU)
+    next_step = context.user_data.pop('next_step', MAIN_MENU)
 
     # التوجيه بناءً على الهدف الأصلي
     if next_step == APOLOGY_TYPE:
@@ -193,14 +191,14 @@ async def handle_team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
         return APOLOGY_TYPE
     elif next_step == LEAVE_START_DATE:
-        await update.message.reply_text("يرجى إرسال تاريخ بدء الإجازة/الانقطاع (بالصيغة: 2024-12-31):", reply_markup=ReplyKeyboardRemove())
+        await update.message.reply_text("يرجى إرسال تاريخ بدء الإجازة/الانقطاع (بالصيغة: YYYY-MM-DD):", reply_markup=ReplyKeyboardRemove())
         return LEAVE_START_DATE
     elif next_step == INITIATIVE_NAME:
         await update.message.reply_text("يرجى إدخال اسم مقترحك/مبادرتك بإيجاز:", reply_markup=ReplyKeyboardRemove())
         return INITIATIVE_NAME
-    elif next_step == PROBLEM_DESCRIPTION:
+    elif next_step == PROBLEM_DETAILS: # تم تغيير التوجيه هنا
         await update.message.reply_text("يرجى وصف المشكلة/الشكوى بوضوح:", reply_markup=ReplyKeyboardRemove())
-        return PROBLEM_DESCRIPTION
+        return PROBLEM_DETAILS
     
     # في حالة خطأ غير متوقع، العودة للقائمة الرئيسية
     return await fallback_to_main_menu(update, context)
@@ -209,7 +207,8 @@ async def handle_team_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 async def handle_apology_type(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['apology_type'] = update.message.text
     await update.message.reply_text("يرجى ذكر سبب الاعتذار بوضوح وإيجاز:")
-    return APOLOGY_REASON
+    # يتم التوجيه إلى APOLOGY_REASON (الآن 5)
+    return INITIATIVE_DETAILS 
 
 async def handle_apology_reason(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['apology_reason'] = update.message.text
@@ -232,12 +231,13 @@ async def handle_apology_notes(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     
     await update.message.reply_text(summary, reply_markup=get_confirmation_keyboard())
-    return APOLOGY_NOTES + 1 # حالة مؤقتة للتأكيد (نستخدم رقم غير مستخدم مثل 8)
+    # العودة إلى حالة التأكيد APOLOGY_NOTES + 1 (المستخدمة للتأكيد العام)
+    return APOLOGY_NOTES + 1 
 
 # --- مسارات الإجازة/الانقطاع (Leave) ---
 async def handle_leave_start_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['leave_start_date'] = update.message.text
-    await update.message.reply_text("يرجى إرسال تاريخ انتهاء الإجازة/الانقطاع (بالصيغة: 2024-12-31):")
+    await update.message.reply_text("يرجى إرسال تاريخ انتهاء الإجازة/الانقطاع (بالصيغة: YYYY-MM-DD):")
     return LEAVE_END_DATE
 
 async def handle_leave_end_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -267,20 +267,44 @@ async def handle_leave_notes(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
     
     await update.message.reply_text(summary, reply_markup=get_confirmation_keyboard())
-    return LEAVE_NOTES + 1 # حالة مؤقتة للتأكيد (نستخدم رقم غير مستخدم مثل 13)
+    # العودة إلى حالة التأكيد LEAVE_NOTES + 1 
+    return LEAVE_NOTES + 1 
 
-# --- مسارات المقترح/الشكوى (Initiative/Problem) ---
+# --- مسارات المقترح (Initiative) - تم إصلاح تدفق البيانات ---
 async def handle_initiative_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """يخزن الاسم الموجز للمقترح ويطلب التفاصيل الكاملة."""
     context.user_data['initiative_name'] = update.message.text
-    await update.message.reply_text("يرجى شرح مقترحك/مبادرتك بالتفصيل:", reply_markup=get_confirmation_keyboard())
-    return INITIATIVE_NAME + 1 # حالة مؤقتة للتأكيد (نستخدم رقم غير مستخدم مثل 6)
+    await update.message.reply_text("يرجى شرح مقترحك/مبادرتك بالتفصيل:", reply_markup=ReplyKeyboardRemove())
+    # ننتقل إلى INITIATIVE_DETAILS (والتي هي 5 في التعريف الحالي)
+    return INITIATIVE_DETAILS
 
-async def handle_problem_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def handle_initiative_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """يخزن التفاصيل الكاملة للمقترح ويعرض ملخص للتأكيد."""
+    context.user_data['initiative_details'] = update.message.text
+    
+    data = context.user_data
+    summary = (
+        f"ملخص طلب المقترح/المبادرة:\n"
+        f"• الاسم: {data.get('full_name')}\n"
+        f"• الفريق: {data.get('team_name')}\n"
+        f"• اسم المقترح: {data.get('initiative_name')}\n"
+        f"• التفاصيل:\n<pre>{data.get('initiative_details')}</pre>"
+        f"\nهل أنت متأكد من إرسال هذا الطلب؟"
+    )
+    
+    # نستخدم حالة APOLOGY_NOTES + 1 كحالة انتظار التأكيد (رقم 8)
+    await update.message.reply_text(summary, parse_mode='HTML', reply_markup=get_confirmation_keyboard())
+    return APOLOGY_NOTES + 1 # حالة تأكيد عامة
+
+# --- مسارات الشكوى (Problem) - تم إصلاح تدفق البيانات ---
+async def handle_problem_details(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """يخزن وصف المشكلة ويطلب ملاحظات إضافية."""
     context.user_data['problem_description'] = update.message.text
     await update.message.reply_text("هل لديك أي ملاحظات إضافية أو أدلة (مثل رابط أو لقطة شاشة)؟ (اكتب 'لا' إذا لم يكن لديك):")
     return PROBLEM_NOTES
 
 async def handle_problem_notes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """يخزن الملاحظات الإضافية ويعرض ملخص للتأكيد."""
     context.user_data['problem_notes'] = update.message.text
     
     # تجميع البيانات وعرضها للتأكيد
@@ -289,13 +313,14 @@ async def handle_problem_notes(update: Update, context: ContextTypes.DEFAULT_TYP
         f"ملخص طلب المشكلة/الشكوى:\n"
         f"• الاسم: {data.get('full_name')}\n"
         f"• الفريق: {data.get('team_name')}\n"
-        f"• المشكلة: {data.get('problem_description')}\n"
+        f"• الوصف: {data.get('problem_description')}\n"
         f"• ملاحظات/أدلة: {data.get('problem_notes')}\n"
         "\nهل أنت متأكد من إرسال هذا الطلب؟"
     )
     
     await update.message.reply_text(summary, reply_markup=get_confirmation_keyboard())
-    return PROBLEM_NOTES + 1 # حالة مؤقتة للتأكيد (نستخدم رقم غير مستخدم مثل 15)
+    # نستخدم حالة PROBLEM_NOTES + 1 كحالة انتظار التأكيد (رقم 15)
+    return PROBLEM_NOTES + 1 
 
 
 # --- معالج الإرسال والتأكيد المشترك (Common Confirmation) ---
@@ -304,12 +329,16 @@ async def confirm_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     """
     يتلقى أمر 'تأكيد وإرسال' ويرسل الطلب إلى الأدمن.
     """
-    current_state = context.chat_data.get('conversation_state')
+    if update.message.text != "تأكيد وإرسال ✅":
+        # هذه الحالة لن تحدث إلا في حالة خطأ في سير المحادثة
+        return await fallback_to_main_menu(update, context)
+
     data = context.user_data
     title = "غير محدد"
     fields = {}
 
-    if "اعتذار" in update.message.text:
+    # تحديد نوع الطلب بناءً على البيانات المخزنة
+    if 'apology_type' in data:
         title = "اعتذار عن مهمة"
         fields = {
             "الاسم الكامل": data.get('full_name'),
@@ -318,7 +347,7 @@ async def confirm_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "السبب": data.get('apology_reason'),
             "ملاحظات": data.get('apology_notes'),
         }
-    elif "إجازة" in update.message.text:
+    elif 'leave_start_date' in data:
         title = "طلب إجازة/انقطاع"
         fields = {
             "الاسم الكامل": data.get('full_name'),
@@ -328,14 +357,15 @@ async def confirm_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "السبب": data.get('leave_reason'),
             "ملاحظات": data.get('leave_notes'),
         }
-    elif "مقترح" in update.message.text:
+    elif 'initiative_name' in data:
         title = "مقترح/مبادرة"
         fields = {
             "الاسم الكامل": data.get('full_name'),
+            "الفريق": data.get('team_name'),
             "اسم المقترح": data.get('initiative_name'),
-            "التفاصيل": update.message.text, # تفاصيل المبادرة هي آخر رسالة
+            "التفاصيل": data.get('initiative_details'), # تم التصحيح لاستخدام البيانات المحفوظة
         }
-    elif "شكوى" in update.message.text:
+    elif 'problem_description' in data:
         title = "ملاحظة/شكوى"
         fields = {
             "الاسم الكامل": data.get('full_name'),
@@ -356,9 +386,7 @@ async def confirm_and_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return MAIN_MENU
 
 async def fallback_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """
-    معالج الإلغاء/الإيقاف لأي محادثة جارية.
-    """
+    """معالج الإلغاء/الإيقاف لأي محادثة جارية."""
     await update.message.reply_text(
         "❌ تم إلغاء العملية. يمكنك البدء من جديد من القائمة الرئيسية.",
         reply_markup=get_main_menu_keyboard()
@@ -367,9 +395,7 @@ async def fallback_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TY
     return MAIN_MENU
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    عرض قائمة الأوامر المتاحة.
-    """
+    """عرض قائمة الأوامر المتاحة."""
     help_text = (
         "مرحباً بك في نظام الموارد البشرية لفريق أبناء الأرض.\n"
         "إليك قائمة الأوامر المتاحة:\n"
@@ -395,7 +421,6 @@ def initialize_application():
         return
 
     try:
-        # إنشاء التطبيق (Application)
         app = Application.builder().token(BOT_TOKEN).build()
 
         # إعداد Conversation Handler الرئيسي
@@ -410,50 +435,52 @@ def initialize_application():
                 ],
                 TEAM_NAME: [
                     MessageHandler(filters.Regex(f"^({'|'.join(TEAM_NAMES)}|إلغاء ❌)$"), handle_team_name),
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_team_name), # للتعامل مع الإدخال الخاطئ
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_team_name), 
                 ],
                 
                 # حالات الاعتذار
                 APOLOGY_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_apology_type)],
-                APOLOGY_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_apology_reason)],
+                INITIATIVE_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_apology_reason)], # APOLOGY_REASON في تدفق الاعتذار
                 APOLOGY_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_apology_notes)],
-                APOLOGY_NOTES + 1: [
-                    MessageHandler(filters.Regex("^تأكيد وإرسال ✅$"), confirm_and_send),
-                    MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
-                ],
                 
                 # حالات الإجازة
                 LEAVE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_start_date)],
                 LEAVE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_end_date)],
                 LEAVE_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_reason)],
                 LEAVE_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_leave_notes)],
+
+                # حالات المقترح (موزعة على INITIATIVE_NAME و INITIATIVE_DETAILS)
+                INITIATIVE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_initiative_name)],
+                # INITIATIVE_DETAILS (والتي تساوي 5) تُستخدم هنا لجمع التفاصيل بعد الاسم الموجز
+                
+                # حالات الشكوى (موزعة على PROBLEM_DETAILS و PROBLEM_NOTES)
+                PROBLEM_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_details)],
+                PROBLEM_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_notes)],
+
+                # حالات التأكيد العامة (APOLOGY_NOTES + 1 هي 7, LEAVE_NOTES + 1 هي 11, PROBLEM_NOTES + 1 هي 14)
+                # نستخدم حالة APOLOGY_NOTES + 1 (رقم 7) كحالة انتظار التأكيد للمقترح أيضاً
+                APOLOGY_NOTES + 1: [
+                    MessageHandler(filters.Regex("^تأكيد وإرسال ✅$"), confirm_and_send),
+                    MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
+                ],
                 LEAVE_NOTES + 1: [
                     MessageHandler(filters.Regex("^تأكيد وإرسال ✅$"), confirm_and_send),
                     MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
                 ],
-
-                # حالات المقترح والشكوى
-                INITIATIVE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_initiative_name)],
-                INITIATIVE_NAME + 1: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_and_send), # المقترح يرسل مباشرة بعد الاسم والتفاصيل
-                    MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
-                ],
-                PROBLEM_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_description)],
-                PROBLEM_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_problem_notes)],
                 PROBLEM_NOTES + 1: [
                     MessageHandler(filters.Regex("^تأكيد وإرسال ✅$"), confirm_and_send),
                     MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu),
                 ],
-                
+
             },
             fallbacks=[
                 CommandHandler("start", start),
                 CommandHandler("cancel", fallback_to_main_menu),
                 MessageHandler(filters.Regex("^إلغاء ❌$"), fallback_to_main_menu)
             ],
-            per_user=True, # جعل المحادثة خاصة بكل مستخدم
+            per_user=True, 
             per_chat=False,
-            allow_reentry=True # السماح بالعودة إلى المحادثة من خلال /start
+            allow_reentry=True
         )
 
         # إضافة Handlers إلى التطبيق
@@ -500,7 +527,7 @@ def wsgi_app(environ, start_response):
         start_response(status, headers)
         return [b"Application not initialized or BOT_TOKEN is missing."]
         
-    # التعامل مع طلب الويب هوك
+    # التعامل مع طلب الويب هوك. يتم التعامل مع المنفذ عبر Gunicorn والـ Procfile
     return application.webhooks(environ, start_response)
 
 
@@ -531,4 +558,3 @@ if __name__ == '__main__':
                 application.run_polling(poll_interval=1.0)
     else:
         logger.error("🚫 BOT_TOKEN غير مُعرف. يرجى تعيينه في متغيرات البيئة.")
-
