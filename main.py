@@ -38,6 +38,7 @@ HR_CONTACT_INFO = os.getenv('HR_CONTACT_INFO', 'مسؤول الموارد الب
 DEVELOPER_USERNAME = "@Mohamadhj98"
 
 # قائمة لمعرفات المدراء/المشرفين المسموح لهم باستخدام لوحة التحكم
+# يجب تحديد هذه المعرفات في متغيرات بيئة Render
 ADMIN_USER_IDS = [int(id.strip()) for id in os.getenv('ADMIN_USER_IDS', '').split(',') if id.strip().isdigit()]
 if ADMIN_CHAT_ID and ADMIN_CHAT_ID.isdigit() and int(ADMIN_CHAT_ID) not in ADMIN_USER_IDS:
     ADMIN_USER_IDS.append(int(ADMIN_CHAT_ID))
@@ -256,7 +257,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 pass
             
     # تنظيف بيانات المستخدم ما عدا بيانات المشرف
-    # تم تحديث القائمة لتشمل البيانات الهامة للمستخدم المسجل
     keys_to_keep = ['is_admin', 'user_id', 'full_name', 'first_name', 'last_name', 'team_name']
     for key in list(context.user_data.keys()):
         if key not in keys_to_keep:
@@ -546,13 +546,11 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await reply_to_chat(update, context, 
                             "لإبلاغ عن مشكلة، من فضلك صفها بإيجاز:",
                             reply_markup=get_back_to_main_menu_keyboard())
-        # ** تم تعديل العودة لتكون حالة مخصصة في المستقبل، لكن حالياً تبقى في MAIN_MENU **
         return MAIN_MENU 
     elif data == 'feedback':
         await reply_to_chat(update, context, 
                             "لإرسال اقتراح أو ملاحظة، اكتب رسالتك وسنقرأها بتمعن:",
                             reply_markup=get_back_to_main_menu_keyboard())
-        # ** تم تعديل العودة لتكون حالة مخصصة في المستقبل، لكن حالياً تبقى في MAIN_MENU **
         return MAIN_MENU 
     elif data == 'references_menu':
         await handle_references_menu(update, context)
@@ -849,13 +847,14 @@ def initialize_application():
         logger.error("خطأ: متغير البيئة BOT_TOKEN غير محدد!")
         return
         
+    # ملاحظة: تم تعديل التطبيق إلى PTB v13.x أو أقدم
     application = Application.builder().token(BOT_TOKEN).build()
     
     # 2. إعداد الـ Handlers
     
     # Handler الإجراءات الإدارية
-    # تم تصحيح الـ pattern ليتوافق مع طريقة التسمية
-    admin_action_handler = CallbackQueryHandler(handle_admin_action, pattern=r'^admin_(approve|reject)_[A-Za-z]+_\d+$', per_message=True)
+    # ** تم حذف per_message=True **
+    admin_action_handler = CallbackQueryHandler(handle_admin_action, pattern=r'^admin_(approve|reject)_[A-Za-z]+_\d+$')
     application.add_handler(admin_action_handler)
     
     # Handler الأوامر العامة (مثل /admin)
@@ -863,19 +862,23 @@ def initialize_application():
     
     # ConversationHandler للمهام الرئيسية والإدارية
     conv_handler = ConversationHandler(
-        # تم إضافة 'admin_menu_start' كنقطة دخول من القائمة الرئيسية
-        entry_points=[CommandHandler('start', start),
-                      CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start)$', per_message=True)],
+        entry_points=[
+            CommandHandler('start', start),
+            # ** تم حذف per_message=True **
+            CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start)$')
+        ],
         states={
             MAIN_MENU: [
-                CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start)$', per_message=True)
+                # ** تم حذف per_message=True **
+                CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start)$')
             ],
             
             # حالات التسجيل
             FULL_NAME_REGISTRATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_full_name)],
             TEAM_NAME_SELECTION: [
-                CallbackQueryHandler(finalize_registration, pattern=r'^team_', per_message=True),
-                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$', per_message=True) 
+                # ** تم حذف per_message=True **
+                CallbackQueryHandler(finalize_registration, pattern=r'^team_'),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$') 
             ],
             
             # حالات طلب الإجازة
@@ -890,31 +893,35 @@ def initialize_application():
             
             # حالات قائمة المشرف وإضافة متطوعين
             ADMIN_MENU: [
-                CallbackQueryHandler(manage_volunteers_menu, pattern='^admin_manage_volunteers$', per_message=True),
-                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$', per_message=True),
-                CallbackQueryHandler(to_menu_handler, pattern='^admin_menu_back$', per_message=True),
-                CallbackQueryHandler(lambda update, context: update.callback_query.answer("هذه الميزة ستكون متاحة قريباً!"), pattern='^admin_view_pending_temp$', per_message=True) # Placeholder
+                # ** تم حذف per_message=True **
+                CallbackQueryHandler(manage_volunteers_menu, pattern='^admin_manage_volunteers$'),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$'),
+                CallbackQueryHandler(to_menu_handler, pattern='^admin_menu_back$'),
+                # ** تم حذف per_message=True **
+                CallbackQueryHandler(lambda update, context: update.callback_query.answer("هذه الميزة ستكون متاحة قريباً!"), pattern='^admin_view_pending_temp$') # Placeholder
             ],
             ADD_VOLUNTEER_FULL_NAME: [
-                # تمت إزالة CallbackQueryHandler هنا والاعتماد على Fallbacks
                 MessageHandler(filters.TEXT & ~filters.COMMAND, get_volunteer_full_name)
             ],
             ADD_VOLUNTEER_SELECT_TEAM: [
-                CallbackQueryHandler(finalize_add_volunteer, pattern=r'^addvol_team_', per_message=True),
-                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$', per_message=True)
+                # ** تم حذف per_message=True **
+                CallbackQueryHandler(finalize_add_volunteer, pattern=r'^addvol_team_'),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
             ],
             
             # حالات المراجع
-            REFERENCES_MENU: [CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$', per_message=True)]
+            # ** تم حذف per_message=True **
+            REFERENCES_MENU: [CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')]
         },
-        fallbacks=[CommandHandler('cancel', cancel),
-                   CallbackQueryHandler(to_menu_handler, pattern='^(to_main_menu|admin_menu_back)$', per_message=True)]
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            # ** تم حذف per_message=True **
+            CallbackQueryHandler(to_menu_handler, pattern='^(to_main_menu|admin_menu_back)$')
+        ]
     )
     
     application.add_handler(conv_handler)
     
-    # ** تم حذف حلقة الـ for الخاصة بـ CallbackQueryHandler group=1 لعدم فعاليتها**
-    # ** والاعتماد على Fallbacks للتعامل مع أزرار العودة داخل حالات الـ TEXT **
 
 # ** يتم استدعاء دالة التهيئة عند تحميل الوحدة (Module) **
 initialize_application()
@@ -947,3 +954,4 @@ if __name__ == '__main__':
         logger.info("يتم التشغيل محلياً باستخدام Polling. اضغط Ctrl+C للإيقاف.")
         # application.run_polling(poll_interval=1.0)
         pass # تم تعطيل التشغيل الفعلي في الكود للحفاظ على نموذج الـ WSGI
+
