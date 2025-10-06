@@ -37,16 +37,11 @@ if ADMIN_CHAT_ID_ENV:
 # --------------------------------- تعريف الحالات (States) ---------------------------------
 (
     MAIN_MENU, FULL_NAME, TEAM_NAME,
-    # اعتذار
     APOLOGY_TYPE, APOLOGY_REASON, APOLOGY_NOTES, APOLOGY_CONFIRM,
-    # إجازة
     LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES, LEAVE_CONFIRM,
-    # مبادرة
     INITIATIVE_NAME, INITIATIVE_DETAILS, INITIATIVE_CONFIRM,
-    # شكوى/ملاحظة
     PROBLEM_DETAILS, PROBLEM_NOTES, PROBLEM_CONFIRM,
-) = range(19)
-
+) = range(18)
 # قائمة فرق العمل
 TEAM_NAMES: Final[list[str]] = ["فريق الإعلام", "فريق التنسيق", "فريق الدعم اللوجستي", "إدارة المشروع"]
 
