@@ -23,13 +23,14 @@ logger = logging.getLogger(__name__)
 
 # --------------------------------- تعريف الحالات والثوابت ---------------------------------
 
+# **# NEW FEATURE:** تم تحديث رقم Range ليتضمن الحالات الجديدة
 # الحالات (States) المستخدمة في ConversationHandler
 (MAIN_MENU, FULL_NAME_REGISTRATION, TEAM_NAME_SELECTION, 
  APOLOGY_TYPE, APOLOGY_REASON,
  LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES,
  FEEDBACK_MESSAGE, PROBLEM_DESCRIPTION,
  ADMIN_MENU, ADD_VOLUNTEER_FULL_NAME, ADD_VOLUNTEER_SELECT_TEAM,
- REFERENCES_MENU) = range(15) 
+ REFERENCES_MENU, MEETINGS_MENU, ADMIN_MEETINGS_MENU, ADMIN_PROMPT_MEETING_TIME) = range(18) 
 
 # متغيرات البيئة والثوابت
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -38,13 +39,20 @@ HR_CONTACT_INFO = os.getenv('HR_CONTACT_INFO', 'مسؤول الموارد الب
 DEVELOPER_USERNAME = "@Mohamadhj98"
 
 # قائمة لمعرفات المدراء/المشرفين المسموح لهم باستخدام لوحة التحكم
-# يجب تحديد هذه المعرفات في متغيرات بيئة Render
 ADMIN_USER_IDS = [int(id.strip()) for id in os.getenv('ADMIN_USER_IDS', '').split(',') if id.strip().isdigit()]
 if ADMIN_CHAT_ID and ADMIN_CHAT_ID.isdigit() and int(ADMIN_CHAT_ID) not in ADMIN_USER_IDS:
     ADMIN_USER_IDS.append(int(ADMIN_CHAT_ID))
 
 # قائمة الفرق
 TEAM_OPTIONS = ["فريق الدعم الأول", "فريق الدعم الثاني", "الفريق المركزي"]
+
+# **# NEW FEATURE:** قائمة أنواع الاجتماعات
+MEETING_TYPES = {
+    'team1': 'اجتماع فريق الدعم الأول',
+    'team2': 'اجتماع فريق الدعم الثاني',
+    'central': 'اجتماع الفريق المركزي',
+    'general': 'اجتماع عام'
+}
 
 # مسار وهمي لملف PDF (يجب استبداله بمسار حقيقي)
 REFERENCE_GUIDE_PATH = 'reference_guide.pdf'
@@ -92,8 +100,18 @@ def init_db():
         )
     """)
     
+    # **# NEW FEATURE:** جدول الإعدادات العامة (لتخزين أوقات الاجتماعات)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    
     conn.commit()
     conn.close()
+
+# ... (بقية دوال DB: get_db_user, register_db_user, save_request, get_pending_request, update_request_status تبقى كما هي) ...
 
 def get_db_user(user_id):
     """جلب بيانات المستخدم من قاعدة البيانات."""
@@ -185,6 +203,28 @@ def update_request_status(request_id, status, admin_notes=None):
                        (status, json.dumps(current_data), request_id))
         conn.commit()
     conn.close()
+
+# **# NEW FEATURE:** دوال الإعدادات (أوقات الاجتماعات)
+def set_meeting_time(key, time_str):
+    """تخزين وقت اجتماع في جدول الإعدادات."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    # استخدام INSERT OR REPLACE لتحديث القيمة إذا كان المفتاح موجوداً
+    cursor.execute("""
+        INSERT OR REPLACE INTO settings (key, value) 
+        VALUES (?, ?)
+    """, (key, time_str))
+    conn.commit()
+    conn.close()
+
+def get_meeting_time(key):
+    """جلب وقت اجتماع من جدول الإعدادات."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM settings WHERE key=?", (key,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else None
 
 
 # --------------------------------- الدوال المساعدة ---------------------------------
@@ -286,8 +326,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
          InlineKeyboardButton("💡 اقتراحات وملاحظات", callback_data='feedback')],
         [InlineKeyboardButton("📚 مراجع الفريق", callback_data='references_menu'),
          InlineKeyboardButton("🎁 هدية لطيفة", callback_data='motivation')],
-        # الزر الجديد المطلوب
+        # الزر الجديد المطلوب (الذكر)
         [InlineKeyboardButton("لا تنسى ذكر الله 📿", callback_data='dhikr')],
+        # **# NEW FEATURE:** زر استعلام أوقات الاجتماعات
+        [InlineKeyboardButton("استعلام عن أوقات الاجتماعات ⏰", callback_data='meetings_menu')],
         # زر المطور المطلوب
         [InlineKeyboardButton(f"المطور: {DEVELOPER_USERNAME} 🧑‍💻", callback_data='developer_contact')]
     ]
@@ -306,6 +348,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     await reply_to_chat(update, context, text, reply_markup=reply_markup, parse_mode='Markdown')
     return MAIN_MENU
+
+# ... (بقية الدوال: get_full_name, finalize_registration) ...
 
 async def get_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """الخطوة الأولى في التسجيل: حفظ الاسم الكامل."""
@@ -361,8 +405,9 @@ async def finalize_registration(update: Update, context: ContextTypes.DEFAULT_TY
     
     return await start(update, context) # العودة إلى القائمة الرئيسية
 
-
-# --------------------------------- وظائف الإجازات والاعتذارات (نماذج) ---------------------------------
+# ... (بقية دوال الإجازات والاعتذارات) ...
+# ... (بقية دوال الإجازات والاعتذارات) ...
+# ... (بقية دوال الإجازات والاعتذارات) ...
 
 async def handle_leave_request(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """بدء طلب الإجازة: طلب تاريخ البدء."""
@@ -527,6 +572,51 @@ async def developer_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                         parse_mode='Markdown')
     return MAIN_MENU
 
+# **# NEW FEATURE:** دوال استعلام أوقات الاجتماعات (للمستخدم)
+async def handle_meetings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """عرض قائمة الاجتماعات للمستخدم للاستعلام عن أوقاتها."""
+    query = update.callback_query
+    await query.answer()
+
+    keyboard = []
+    for key, name in MEETING_TYPES.items():
+        # نستخدم callback_data لتمييز نوع الاجتماع
+        keyboard.append([InlineKeyboardButton(name, callback_data=f'show_meeting_{key}')])
+
+    keyboard.append([InlineKeyboardButton("↩️ العودة للقائمة الرئيسية", callback_data='to_main_menu')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await reply_to_chat(update, context, "⏰ أوقات الاجتماعات:\n\nمن فضلك اختر نوع الاجتماع للاستعلام عن وقته:", reply_markup=reply_markup)
+    return MEETINGS_MENU
+
+async def show_meeting_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """جلب وعرض وقت الاجتماع المحدد."""
+    query = update.callback_query
+    await query.answer()
+    
+    meeting_key = query.data.replace('show_meeting_', '')
+    meeting_name = MEETING_TYPES.get(meeting_key, 'اجتماع غير معروف')
+    
+    time_str = get_meeting_time(meeting_key)
+    
+    if time_str:
+        response_text = f"✅ موعد **{meeting_name}** هو: **{time_str}**"
+    else:
+        # الرسالة المطلوبة
+        response_text = f"⚠️ لم يتم تعيين موعد **{meeting_name}** بعد."
+        
+    # نعيد لوحة المفاتيح الخاصة بقائمة الاجتماعات
+    keyboard = []
+    for key, name in MEETING_TYPES.items():
+        keyboard.append([InlineKeyboardButton(name, callback_data=f'show_meeting_{key}')])
+
+    keyboard.append([InlineKeyboardButton("↩️ العودة للقائمة الرئيسية", callback_data='to_main_menu')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await reply_to_chat(update, context, response_text, reply_markup=reply_markup, parse_mode='Markdown')
+    return MEETINGS_MENU
+
+
 async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """يُستخدم لمعالجة أزرار القائمة الرئيسية."""
     query = update.callback_query
@@ -539,9 +629,13 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     elif data == 'apology':
         return await handle_apology_request(update, context)
     elif data == 'dhikr':
+        # **# NEW FEATURE:** معالجة زر الذكر
         return await dhikr_reminder(update, context) 
     elif data == 'developer_contact':
         return await developer_contact(update, context) 
+    elif data == 'meetings_menu':
+        # **# NEW FEATURE:** معالجة زر أوقات الاجتماعات
+        return await handle_meetings_menu(update, context)
     elif data == 'problem':
         await reply_to_chat(update, context, 
                             "لإبلاغ عن مشكلة، من فضلك صفها بإيجاز:",
@@ -563,6 +657,10 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return await admin_menu(update, context) # ** معالجة زر المشرف **
     
     return MAIN_MENU
+
+# ... (بقية الدوال: handle_references_menu) ...
+# ... (بقية الدوال: is_admin) ...
+# ... (بقية الدوال: handle_admin_action) ...
 
 async def handle_references_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """إرسال ملف المراجع (PDF) للمستخدم."""
@@ -586,14 +684,14 @@ async def handle_references_menu(update: Update, context: ContextTypes.DEFAULT_T
     # يتم هنا افتراض وجود ملف مرجعي للمحاكاة، يجب استبدال هذا بالملف الحقيقي
     if os.path.exists(REFERENCE_GUIDE_PATH):
         try:
-            with open(REFERENCE_GUIDE_PATH, 'rb') as doc_file:
-                message = await context.bot.send_document(
-                    chat_id=update.effective_chat.id, 
-                    document=InputFile(doc_file, filename='دليل_المراجع.pdf'),
-                    caption=text,
-                    reply_markup=get_back_to_main_menu_keyboard()
-                )
-                context.user_data['last_bot_message_id'] = message.message_id
+            # يجب التأكد من استخدام InputFile بشكل صحيح
+            message = await context.bot.send_document(
+                chat_id=update.effective_chat.id, 
+                document=REFERENCE_GUIDE_PATH, # تعديل لاستخدام المسار مباشرة
+                caption=text,
+                reply_markup=get_back_to_main_menu_keyboard()
+            )
+            context.user_data['last_bot_message_id'] = message.message_id
         except Exception as e:
              logger.error(f"فشل إرسال الملف: {e}")
              await update.effective_chat.send_message(
@@ -609,7 +707,6 @@ async def handle_references_menu(update: Update, context: ContextTypes.DEFAULT_T
 
 
     return REFERENCES_MENU
-
 
 # --------------------------------- وظائف الإدارة (Admin) ---------------------------------
 
@@ -637,6 +734,8 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     keyboard = [
         [InlineKeyboardButton("✅ مراجعة الطلبات المعلقة (قريباً)", callback_data='admin_view_pending_temp')],
         [InlineKeyboardButton("👤 إدارة المتطوعين", callback_data='admin_manage_volunteers')],
+        # **# NEW FEATURE:** زر تحديد أوقات الاجتماعات
+        [InlineKeyboardButton("⏰ تحديد أوقات الاجتماعات", callback_data='admin_set_meetings')],
         [InlineKeyboardButton("↩️ العودة لقائمة المستخدم", callback_data='to_main_menu')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -645,6 +744,69 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await reply_to_chat(update, context, "لوحة تحكم المشرف 🛠️", reply_markup=reply_markup, parse_mode='Markdown')
     
     return ADMIN_MENU
+
+# **# NEW FEATURE:** دوال تحديد أوقات الاجتماعات (للمشرف)
+async def admin_set_meetings_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """عرض قائمة الاجتماعات للمشرف لتحديد أوقاتها."""
+    query = update.callback_query
+    await query.answer()
+
+    if not await is_admin(update): return ADMIN_MENU
+    
+    keyboard = []
+    for key, name in MEETING_TYPES.items():
+        current_time = get_meeting_time(key) or 'لم يُحدد بعد'
+        keyboard.append([InlineKeyboardButton(f"{name} ({current_time})", callback_data=f'set_meeting_prompt_{key}')])
+
+    keyboard.append([InlineKeyboardButton("🔙 العودة للقائمة الإدارية", callback_data='admin_menu_back')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await reply_to_chat(update, context, "⏰ حدد الاجتماع الذي ترغب بتحديد وقته:", reply_markup=reply_markup)
+    return ADMIN_MEETINGS_MENU
+
+async def admin_prompt_for_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """يطلب من المشرف إدخال الوقت للاجتماع المحدد."""
+    query = update.callback_query
+    await query.answer()
+
+    if not await is_admin(update): return ADMIN_MENU
+    
+    meeting_key = query.data.replace('set_meeting_prompt_', '')
+    meeting_name = MEETING_TYPES.get(meeting_key, 'اجتماع غير معروف')
+    
+    context.user_data['meeting_to_set'] = meeting_key
+    
+    await reply_to_chat(update, context, 
+                        f"من فضلك، أرسل وقت **{meeting_name}** الجديد (مثلاً: الثلاثاء 5:00 مساءً، أو أرسل 'مسح' لإزالة الوقت):", 
+                        reply_markup=get_back_to_main_menu_keyboard(),
+                        parse_mode='Markdown')
+    return ADMIN_PROMPT_MEETING_TIME
+
+async def admin_finalize_set_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """يحفظ الوقت المحدد في قاعدة البيانات ويعود لقائمة الإدارة."""
+    time_str = update.message.text.strip()
+    meeting_key = context.user_data.pop('meeting_to_set', None)
+    
+    if not meeting_key:
+        return await admin_set_meetings_menu(update, context)
+        
+    meeting_name = MEETING_TYPES.get(meeting_key, 'اجتماع غير معروف')
+
+    if time_str.lower() == 'مسح':
+        set_meeting_time(meeting_key, '') # حفظ قيمة فارغة لحذف الوقت
+        await reply_to_chat(update, context, 
+                        f"✅ تم مسح وقت **{meeting_name}** بنجاح.", 
+                        parse_mode='Markdown')
+    else:
+        # حفظ في قاعدة البيانات
+        set_meeting_time(meeting_key, time_str)
+        
+        await reply_to_chat(update, context, 
+                            f"✅ تم حفظ وقت **{meeting_name}** بنجاح: **{time_str}**", 
+                            parse_mode='Markdown')
+    
+    # العودة إلى قائمة تحديد الاجتماعات
+    return await admin_set_meetings_menu(update, context)
 
 async def manage_volunteers_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """بدء مسار إدارة المتطوعين."""
@@ -864,58 +1026,89 @@ def initialize_application():
     conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler('start', start),
-            # ** تم حذف per_message=True **
-            CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start)$')
+            # **# NEW FEATURE:** إضافة meetings_menu
+            CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start|meetings_menu)$')
         ],
         states={
             MAIN_MENU: [
-                # ** تم حذف per_message=True **
-                CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start)$')
+                # **# NEW FEATURE:** إضافة meetings_menu
+                CallbackQueryHandler(main_menu_handler, pattern='^(apology|leave|problem|feedback|motivation|references_menu|dhikr|developer_contact|admin_menu_start|meetings_menu)$')
             ],
             
             # حالات التسجيل
             FULL_NAME_REGISTRATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_full_name)],
             TEAM_NAME_SELECTION: [
-                # ** تم حذف per_message=True **
                 CallbackQueryHandler(finalize_registration, pattern=r'^team_'),
                 CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$') 
             ],
             
             # حالات طلب الإجازة
-            LEAVE_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_leave_start_date)],
-            LEAVE_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_leave_end_date)],
-            LEAVE_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_leave_reason)],
-            LEAVE_NOTES: [MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_leave_request)],
+            LEAVE_START_DATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_leave_start_date),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
+            ],
+            LEAVE_END_DATE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_leave_end_date),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
+            ],
+            LEAVE_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_leave_reason),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
+            ],
+            LEAVE_NOTES: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_leave_request),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
+            ],
 
             # حالات طلب الاعتذار
-            APOLOGY_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_apology_type)],
-            APOLOGY_REASON: [MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_apology_request)],
+            APOLOGY_TYPE: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_apology_type),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
+            ],
+            APOLOGY_REASON: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_apology_request),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
+            ],
+            
+            # **# NEW FEATURE:** حالات استعلام أوقات الاجتماعات (للمستخدم)
+            MEETINGS_MENU: [
+                CallbackQueryHandler(show_meeting_time, pattern=r'^show_meeting_'),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
+            ],
             
             # حالات قائمة المشرف وإضافة متطوعين
             ADMIN_MENU: [
-                # ** تم حذف per_message=True **
                 CallbackQueryHandler(manage_volunteers_menu, pattern='^admin_manage_volunteers$'),
+                # **# NEW FEATURE:** زر تحديد أوقات الاجتماعات
+                CallbackQueryHandler(admin_set_meetings_menu, pattern='^admin_set_meetings$'), 
                 CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$'),
                 CallbackQueryHandler(to_menu_handler, pattern='^admin_menu_back$'),
-                # ** تم حذف per_message=True **
                 CallbackQueryHandler(lambda update, context: update.callback_query.answer("هذه الميزة ستكون متاحة قريباً!"), pattern='^admin_view_pending_temp$') # Placeholder
             ],
+            # **# NEW FEATURE:** حالات تحديد أوقات الاجتماعات (للمشرف)
+            ADMIN_MEETINGS_MENU: [
+                CallbackQueryHandler(admin_prompt_for_time, pattern=r'^set_meeting_prompt_'),
+                CallbackQueryHandler(to_menu_handler, pattern='^admin_menu_back$'),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$') # Fallback
+            ],
+            ADMIN_PROMPT_MEETING_TIME: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, admin_finalize_set_time),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$') # Allow going back
+            ],
             ADD_VOLUNTEER_FULL_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, get_volunteer_full_name)
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_volunteer_full_name),
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
             ],
             ADD_VOLUNTEER_SELECT_TEAM: [
-                # ** تم حذف per_message=True **
                 CallbackQueryHandler(finalize_add_volunteer, pattern=r'^addvol_team_'),
                 CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
             ],
             
             # حالات المراجع
-            # ** تم حذف per_message=True **
             REFERENCES_MENU: [CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')]
         },
         fallbacks=[
             CommandHandler('cancel', cancel),
-            # ** تم حذف per_message=True **
             CallbackQueryHandler(to_menu_handler, pattern='^(to_main_menu|admin_menu_back)$')
         ]
     )
@@ -954,4 +1147,3 @@ if __name__ == '__main__':
         logger.info("يتم التشغيل محلياً باستخدام Polling. اضغط Ctrl+C للإيقاف.")
         # application.run_polling(poll_interval=1.0)
         pass # تم تعطيل التشغيل الفعلي في الكود للحفاظ على نموذج الـ WSGI
-
