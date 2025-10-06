@@ -264,6 +264,9 @@ async def to_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
     
+    # يجب مسح أي بيانات حالة مؤقتة هنا إذا كانت موجودة
+    context.user_data.clear()
+    
     user_id = query.from_user.id
     user_data = get_user(user_id)
     
@@ -283,6 +286,9 @@ async def to_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """يلغي أي عملية ويعيد المستخدم إلى القائمة الرئيسية."""
+    # مسح حالة المستخدم
+    context.user_data.clear()
+    
     query = update.callback_query
     if query:
         await query.answer()
@@ -295,12 +301,20 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         reply_text = f"تم إلغاء الطلب. مرحباً بك مجدداً يا {full_name} في القائمة الرئيسية! 👋\n" \
                      "يرجى اختيار نوع الطلب الذي تريده."
         
-        await update.effective_message.edit_text(
-            reply_text, 
-            reply_markup=get_main_menu_keyboard()
-        )
-        # مسح حالة المستخدم
-        context.user_data.clear()
+        # إذا كان التحديث من رسالة (مثل /cancel)
+        if update.message:
+            await update.message.reply_text(
+                reply_text, 
+                reply_markup=get_main_menu_keyboard(),
+                reply_to_message_id=None
+            )
+        # إذا كان التحديث من زر
+        elif query:
+            await query.edit_message_text(
+                reply_text, 
+                reply_markup=get_main_menu_keyboard()
+            )
+
         return MAIN_MENU
     else:
         # إذا لم يكن مسجلاً
@@ -407,14 +421,11 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # استخراج محتوى الرسالة الأصلية
-    original_text = query.message.text_markdown_v2 if query.message.text_markdown_v2 else query.message.text
-
-    # استخراج نوع الطلب واسم الموظف من النص الأصلي
-    request_type_match = original_text.splitlines()[0].split(':')
-    request_type = request_type_match[1].strip().replace('**', '') if len(request_type_match) > 1 else "طلب"
+    original_text = query.message.text
     
-    employee_match = next((line for line in original_text.splitlines() if line.startswith('**الموظف:')), None)
-    employee_name = employee_match.split(': ')[1].split('(@')[0].strip() if employee_match else "الموظف"
+    # استخراج نوع الطلب واسم الموظف من النص الأصلي
+    # محاولة استخراج نوع الطلب من السطر الأول
+    request_type = next((line.split(':')[1].strip().replace('**', '') for line in original_text.splitlines() if line.startswith('📢 **طلب جديد:')), "طلب")
     
     # بناء رسالة تحديث المشرف
     admin_update_text = original_text.replace(
@@ -436,43 +447,17 @@ async def handle_admin_action(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # إضافة رسالة خاصة لقبول الإجازة
     if new_status == 'Approved':
-        if 'Leave' in request_type:
+        if 'Leave' in request_type or 'إجازة' in request_type:
             user_notification_text += "نتمنى لك وقتاً سعيداً! لا تغب كثيراً، سنشتاق لك ✨"
         else:
             user_notification_text += "يمكنك المتابعة. شكراً لك!"
     elif new_status == 'Rejected':
         user_notification_text += "يرجى مراجعة مسؤول الموارد البشرية للمزيد من التفاصيل."
 
-    # محاولة استخراج User ID من الرسالة الأصلية إذا كان متوفراً (لتحديد من نُرسل إليه)
-    user_id_match = next((line for line in original_text.splitlines() if line.startswith('**الموظف:')), None)
-    if user_id_match:
-        # استخراج المعرف (@username) أو محاولة تخمين الـ ID (يتطلب قاعدة بيانات لمطابقة Username بالـ ID)
-        # هنا نفترض وجود User ID في request_data عند إرسال الطلب الأصلي، أو نعتمد على Username:
-        try:
-            # طريقة غير مضمونة 100% ولكنها محاولة
-            username = user_id_match.split('(@')[1].split(')')[0]
-            # يجب أن نعتمد على user_id المخزن في قاعدة بيانات المستخدمين
-            # بما أننا لا نملك ID مباشرة من النص، نرسل للمستخدم الذي قام بالرد على الأمر (إذا كان هو نفسه)
-            # الحل الأفضل: تخزين request_id مع user_id في DB
-            
-            # في هذه المرحلة، نعتمد على أن الطلب تم إرساله من موظف مسجل
-            # ولغرض التدريب، نعتمد على أنه موظف حالي
-            pass
-        except Exception:
-            logger.warning(f"لم نتمكن من استخراج username للرد على المستخدم للطلب {request_id}.")
-
-    # **ملاحظة:** بما أننا لا نخزن معرّف الطلب (request_id) مع معرّف المستخدم (user_id) في قاعدة بيانات، 
-    # لا يمكننا ضمان إرسال الإشعار للشخص الصحيح هنا.
-    # الحل المؤقت: يمكن للمشرف الرد على رسالة الطلب يدوياً.
+    # **ملاحظة:** لا يمكننا تحديد الـ user_id للموظف من النص. يجب تخزينه في DB.
+    # لغرض التشغيل السليم، نفترض أن المشرف سيقوم بالرد يدوياً.
     
-    # لغرض عرض الكود السليم، سنكتفي بإرسال الإشعار كمثال
-    # يجب أن يتم استخراج user_id من مكان موثوق (مثل DB) وإرساله
-    
-    # مثال على إرسال الإشعار (إذا تمكنا من تحديد user_id)
-    # await context.bot.send_message(chat_id=target_user_id, text=user_notification_text, parse_mode='Markdown')
-
-    
-    return ConversationHandler.END # إنهاء عملية المشرف (الرد على الطلب)
+    return ConversationHandler.END 
 
 
 # --------------------------------- Handlers - إدارة المتطوعين ---------------------------------
@@ -512,9 +497,6 @@ async def finalize_volunteer_addition(update: Update, context: ContextTypes.DEFA
     team = query.data.split('_')[2]
     full_name = context.user_data.pop('temp_volunteer_name', 'غير معروف')
 
-    # **ملاحظة:** بما أننا لا نملك User ID للمتطوع، هذه العملية تسجيل "منطقي" فقط.
-    # إذا كان يجب تسجيل المتطوع في DB، فيجب أن يكون المشرف قد أدخل الـ ID أيضاً.
-    
     # رسالة نجاح للمشرف
     reply_text = f"🎉 **تمت عملية التسجيل المنطقي لمتطوع جديد.**\n" \
                  f"**الاسم:** {full_name}\n" \
@@ -526,11 +508,6 @@ async def finalize_volunteer_addition(update: Update, context: ContextTypes.DEFA
         reply_markup=get_admin_menu_keyboard()
     )
     return ADMIN_MENU
-
-# --------------------------------- Handlers - مسارات الطلبات (Leave, Apology, Problem) ---------------------------------
-
-# (لغرض الاختصار، لن ندرج جميع Handlers الطلبات هنا، ولكن يجب أن تكون موجودة في الكود)
-# (نركز على تهيئة ConversationHandler)
 
 # --------------------------------- وظائف التهيئة والتشغيل ---------------------------------
 
@@ -552,12 +529,9 @@ def initialize_application():
     application = Application.builder().token(BOT_TOKEN).build()
 
     # Handlers المشرف (يتم إضافته قبل ConversationHandler لتكون له أولوية)
-    # يتم إضافته في المجموعة 0 الافتراضية
-
-    # معالج أمر /admin (للوصول إلى قائمة المشرف)
     application.add_handler(CommandHandler('admin', admin_menu))
     
-    # معالج أزرار قبول/رفض الطلبات (يجب أن يكون في مجموعة 1 لتجنب التداخل مع ConversationHandler)
+    # معالج أزرار قبول/رفض الطلبات (يجب أن يكون في مجموعة 1)
     application.add_handler(
         CallbackQueryHandler(handle_admin_action, pattern='^action_(Approved|Rejected)_'), 
         group=1
@@ -592,11 +566,10 @@ def initialize_application():
         },
         fallbacks=[CommandHandler('cancel', cancel), CallbackQueryHandler(cancel, pattern='^cancel$')],
         map_to_parent={
-            MAIN_MENU: MAIN_MENU # العودة إلى القائمة الرئيسية للتطبيق الرئيسي
+            MAIN_MENU: MAIN_MENU 
         }
     )
-    application.add_handler(admin_conv_handler)
-
+    # application.add_handler(admin_conv_handler) # لا نحتاج لإضافة هذا لعدم استخدامه كدخول
 
     # Handlers مسار المحادثة الرئيسي (ConversationHandler)
     conv_handler = ConversationHandler(
@@ -606,9 +579,12 @@ def initialize_application():
             TEAM_NAME: [CallbackQueryHandler(get_team_name, pattern='^team_')],
             MAIN_MENU: [
                 CallbackQueryHandler(handle_references_menu, pattern='^show_references$'),
-                # إضافة معالجات لمسارات الطلبات الأخرى هنا (Leave, Apology, Problem)
             ],
-            # باقي الحالات
+            # دمج مسار إضافة المتطوعين هنا
+            ADMIN_MENU: [
+                CallbackQueryHandler(admin_manage_volunteers, pattern='^admin_manage_volunteers$'),
+                CallbackQueryHandler(cancel, pattern='^cancel$')
+            ],
             ADD_VOLUNTEER_FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_volunteer_full_name)],
             ADD_VOLUNTEER_SELECT_TEAM: [CallbackQueryHandler(finalize_volunteer_addition, pattern='^vol_team_')],
         },
@@ -626,7 +602,8 @@ def initialize_application():
 
 
 # ** يتم استدعاء دالة التهيئة عند تحميل الوحدة (Module) **
-initialize_application()
+# 🛑 التعديل هنا: نزيل الاستدعاء في هذا المكان.
+# initialize_application() 
 
 
 # --------------------------------- دالة WSGI الوسيطة (لتشغيل Gunicorn) ---------------------------------
@@ -634,6 +611,12 @@ def wsgi_app(environ, start_response):
     """
     دالة WSGI الوسيطة التي يستدعيها Gunicorn. 
     """
+    global application
+    
+    if application is None:
+        # إذا لم يتم تهيئة التطبيق بعد (وهذا يحدث عند بدء Gunicorn)
+        initialize_application()
+
     if application is None:
         # إذا فشلت التهيئة، أعد 500
         status = '500 INTERNAL SERVER ERROR'
@@ -646,19 +629,25 @@ def wsgi_app(environ, start_response):
 
 # --------------------------------- دالة التشغيل المحلية (للتطوير فقط) ---------------------------------
 if __name__ == '__main__':
-    if application:
-        # 🛑 التشغيل باستخدام Webhook أو Polling بناءً على متغير البيئة
-        if WEBHOOK_URL:
-            # تشغيل Webhook (لبيئات الاستضافة)
-            logger.info(f"يتم إعداد الويب هوك: {WEBHOOK_URL}")
-            application.run_webhook( 
-                listen="0.0.0.0",
-                port=PORT,
-                url_path=BOT_TOKEN,
-                webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
-            )
-        else:
-            # تشغيل Polling (للتشغيل المحلي)
-            logger.info("يتم التشغيل محلياً باستخدام Polling. اضغط Ctrl+C للإيقاف.")
-            application.run_polling(poll_interval=1.0)
+    if BOT_TOKEN:
+        if application is None:
+            initialize_application()
+            
+        if application:
+            # 🛑 التشغيل باستخدام Webhook أو Polling بناءً على متغير البيئة
+            if WEBHOOK_URL:
+                # تشغيل Webhook (لبيئات الاستضافة)
+                logger.info(f"يتم إعداد الويب هوك: {WEBHOOK_URL}")
+                application.run_webhook( 
+                    listen="0.0.0.0",
+                    port=PORT,
+                    url_path=BOT_TOKEN,
+                    webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
+                )
+            else:
+                # تشغيل Polling (للتشغيل المحلي)
+                logger.info("يتم التشغيل محلياً باستخدام Polling. اضغط Ctrl+C للإيقاف.")
+                application.run_polling(poll_interval=1.0)
+    else:
+        logger.error("BOT_TOKEN غير مُعرَّف. يرجى تعيين متغير البيئة BOT_TOKEN.")
 
