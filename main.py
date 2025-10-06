@@ -48,7 +48,7 @@ TEAM_OPTIONS = ["فريق الدعم الأول", "فريق الدعم الثا�
 # مسار وهمي لملف PDF (يجب استبداله بمسار حقيقي)
 REFERENCE_GUIDE_PATH = 'reference_guide.pdf'
 
-# رسالة الذكر
+# رسالة الذكر المطلوبة
 DHIKR_MESSAGE = """
 سبحان الله
 الحمدلله
@@ -271,7 +271,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.update(user_data)
 
 
-    # إنشاء لوحة المفاتيح الرئيسية (مع الأزرار الجديدة)
+    # إنشاء لوحة المفاتيح الرئيسية (تم تصحيحها هنا لإضافة جميع الأزرار المطلوبة)
     keyboard = [
         [InlineKeyboardButton("📝 طلب اعتذار", callback_data='apology'),
          InlineKeyboardButton("🌴 طلب إجازة", callback_data='leave')],
@@ -279,7 +279,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
          InlineKeyboardButton("💡 اقتراحات وملاحظات", callback_data='feedback')],
         [InlineKeyboardButton("📚 مراجع الفريق", callback_data='references_menu'),
          InlineKeyboardButton("🎁 هدية لطيفة", callback_data='motivation')],
+        # الزر الجديد المطلوب
         [InlineKeyboardButton("لا تنسى ذكر الله 📿", callback_data='dhikr')],
+        # زر المطور المطلوب
         [InlineKeyboardButton(f"المطور: {DEVELOPER_USERNAME} 🧑‍💻", callback_data='developer_contact')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -296,19 +298,19 @@ async def get_full_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     """الخطوة الأولى في التسجيل: حفظ الاسم الكامل."""
     full_name = update.message.text.strip()
     
-    # التأكد من وجود مسافة على الأقل (اسم أول وأخير)
-    if ' ' not in full_name:
+    # التأكد من وجود نص
+    if not full_name:
         await reply_to_chat(update, context, 
-                            "الرجاء إدخال اسمك الكامل (الأول والأخير معاً):",
+                            "الرجاء إدخال اسمك الكامل:",
                             reply_markup=ReplyKeyboardRemove())
         return FULL_NAME_REGISTRATION
         
     context.user_data['full_name'] = full_name
     
-    # محاولة تقسيم الاسم إلى أول وأخير لاستخدامه في DB والطلبات
+    # محاولة تقسيم الاسم إلى أول وأخير لتسجيله في DB (حيث أن الاسم الأول هو ما يتم استخدامه للترحيب)
     name_parts = full_name.split(' ', 1)
     context.user_data['first_name'] = name_parts[0]
-    context.user_data['last_name'] = name_parts[1] if len(name_parts) > 1 else "" # قد يكون اسماً مفرداً
+    context.user_data['last_name'] = name_parts[1] if len(name_parts) > 1 else "" 
     
     welcome_text = f"اهليييين والله يا {context.user_data['first_name']}! 🎉"
     
@@ -465,23 +467,23 @@ async def finalize_apology_request(update: Update, context: ContextTypes.DEFAULT
     return await start(update, context) 
 
 async def dhikr_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """إرسال رسالة الذكر."""
+    """إرسال رسالة الذكر المطلوبة."""
     query = update.callback_query
     await query.answer()
     
     await reply_to_chat(update, context, 
-                        f"🕊️ تذكرة طيبة:\n\n{DHIKR_MESSAGE}", 
+                        f"🕊️ **لا تنسى ذكر الله** 🕊️\n\n{DHIKR_MESSAGE}", 
                         reply_markup=get_back_to_main_menu_keyboard(),
                         parse_mode='Markdown')
     return MAIN_MENU
 
 async def developer_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """إرسال رسالة المطور."""
+    """إرسال رسالة المطور المطلوبة."""
     query = update.callback_query
     await query.answer()
     
     await reply_to_chat(update, context, 
-                        f"🧑‍💻 تم تطوير هذا البوت بواسطة: {DEVELOPER_USERNAME}\n\n"
+                        f"🧑‍💻 تم تطوير هذا البوت بواسطة: **{DEVELOPER_USERNAME}**\n\n"
                         "نتمنى لكم تجربة استخدام ممتازة!", 
                         reply_markup=get_back_to_main_menu_keyboard(),
                         parse_mode='Markdown')
@@ -499,9 +501,9 @@ async def main_menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     elif data == 'apology':
         return await handle_apology_request(update, context)
     elif data == 'dhikr':
-        return await dhikr_reminder(update, context)
+        return await dhikr_reminder(update, context) # معالجة زر الذكر
     elif data == 'developer_contact':
-        return await developer_contact(update, context)
+        return await developer_contact(update, context) # معالجة زر المطور
     elif data == 'problem':
         await reply_to_chat(update, context, 
                             "لإبلاغ عن مشكلة، من فضلك صفها بإيجاز:",
@@ -540,6 +542,7 @@ async def handle_references_menu(update: Update, context: ContextTypes.DEFAULT_T
         except Exception:
             pass
 
+    # يتم هنا افتراض وجود ملف مرجعي للمحاكاة، يجب استبدال هذا بالملف الحقيقي
     if os.path.exists(REFERENCE_GUIDE_PATH):
         try:
             with open(REFERENCE_GUIDE_PATH, 'rb') as doc_file:
@@ -557,6 +560,7 @@ async def handle_references_menu(update: Update, context: ContextTypes.DEFAULT_T
                  reply_markup=get_back_to_main_menu_keyboard()
              )
     else:
+        # إرسال رسالة نصية في حال عدم وجود الملف
         await update.effective_chat.send_message( 
                             text=text + "\n\n❌ ملاحظة: لم يتم العثور على ملف المراجع (PDF) على السيرفر.",
                             reply_markup=get_back_to_main_menu_keyboard())
@@ -635,9 +639,9 @@ async def get_volunteer_full_name(update: Update, context: ContextTypes.DEFAULT_
     """حفظ الاسم الكامل وطلب تحديد الفريق."""
     full_name = update.message.text.strip()
     
-    if ' ' not in full_name:
+    if not full_name:
         await reply_to_chat(update, context, 
-                            "الرجاء إدخال الاسم الأول والأخير معاً للمتطوع.",
+                            "الرجاء إدخال الاسم الكامل للمتطوع.",
                             reply_markup=get_back_to_main_menu_keyboard())
         return ADD_VOLUNTEER_FULL_NAME
         
@@ -849,7 +853,10 @@ def initialize_application():
                 CallbackQueryHandler(to_menu_handler, pattern='^admin_menu_back$'),
                 CallbackQueryHandler(lambda update, context: update.callback_query.answer("هذه الميزة ستكون متاحة قريباً!"), pattern='^admin_view_pending_temp$') # Placeholder
             ],
-            ADD_VOLUNTEER_FULL_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_volunteer_full_name)],
+            ADD_VOLUNTEER_FULL_NAME: [
+                CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$'), # لضمان عمل زر العودة في حالة الإدخال
+                MessageHandler(filters.TEXT & ~filters.COMMAND, get_volunteer_full_name)
+            ],
             ADD_VOLUNTEER_SELECT_TEAM: [
                 CallbackQueryHandler(finalize_add_volunteer, pattern=r'^addvol_team_'),
                 CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$')
@@ -867,8 +874,7 @@ def initialize_application():
     # إضافة معالجات زر العودة لجميع حالات إدخال النص
     # هذا يضمن أن زر العودة يعمل في أي نقطة إدخال نص
     for state in [LEAVE_START_DATE, LEAVE_END_DATE, LEAVE_REASON, LEAVE_NOTES, 
-                  APOLOGY_TYPE, APOLOGY_REASON, 
-                  ADD_VOLUNTEER_FULL_NAME]:
+                  APOLOGY_TYPE, APOLOGY_REASON]:
         application.add_handler(CallbackQueryHandler(to_menu_handler, pattern='^to_main_menu$', func=lambda update, context, s=state: context.user_data.get('state') == s), group=1)
 
 # ** يتم استدعاء دالة التهيئة عند تحميل الوحدة (Module) **
